@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
     std::cout << "IO Schedulers: " << config.io_schedulers << "\n";
     std::cout << "\n";
 
-    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, config.io_schedulers, 1);
+    Runtime runtime(config.io_schedulers, 1);
     runtime.start();
 
     // 启动所有连接

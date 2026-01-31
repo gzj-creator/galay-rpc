@@ -14,6 +14,7 @@
 #include "RpcService.h"
 #include "galay-kernel/concurrency/AsyncMutex.h"
 #include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/common/AsyncStrategy.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -109,21 +110,6 @@ concept ServiceRegistry = requires(T registry,
 
     // 取消监听
     { registry.unwatchService(service_name) } -> std::same_as<void>;
-};
-
-/**
- * @brief 服务选择器 Concept
- *
- * @details 定义负载均衡策略必须实现的接口。
- */
-template<typename T>
-concept ServiceSelector = requires(T selector,
-                                   const std::vector<ServiceEndpoint>& endpoints) {
-    // 选择一个服务实例
-    { selector.select(endpoints) } -> std::same_as<const ServiceEndpoint*>;
-
-    // 更新服务列表
-    { selector.update(endpoints) } -> std::same_as<void>;
 };
 
 /**
@@ -412,95 +398,23 @@ private:
 // 验证AsyncLocalServiceRegistry满足AsyncServiceRegistry concept
 static_assert(AsyncServiceRegistry<AsyncLocalServiceRegistry>, "AsyncLocalServiceRegistry must satisfy AsyncServiceRegistry concept");
 
-/**
- * @brief 轮询选择器
- */
-class RoundRobinSelector {
-public:
-    const ServiceEndpoint* select(const std::vector<ServiceEndpoint>& endpoints) {
-        if (endpoints.empty()) {
-            return nullptr;
-        }
-        size_t idx = m_index.fetch_add(1, std::memory_order_relaxed) % endpoints.size();
-        return &endpoints[idx];
-    }
-
-    void update(const std::vector<ServiceEndpoint>& /*endpoints*/) {
-        // 轮询不需要特殊处理
-    }
-
-private:
-    std::atomic<size_t> m_index{0};
-};
-
-/**
- * @brief 随机选择器
- */
-class RandomSelector {
-public:
-    const ServiceEndpoint* select(const std::vector<ServiceEndpoint>& endpoints) {
-        if (endpoints.empty()) {
-            return nullptr;
-        }
-        size_t idx = std::rand() % endpoints.size();
-        return &endpoints[idx];
-    }
-
-    void update(const std::vector<ServiceEndpoint>& /*endpoints*/) {
-        // 随机不需要特殊处理
-    }
-};
-
-/**
- * @brief 加权轮询选择器
- */
-class WeightedRoundRobinSelector {
-public:
-    const ServiceEndpoint* select(const std::vector<ServiceEndpoint>& endpoints) {
-        if (endpoints.empty()) {
-            return nullptr;
-        }
-
-        // 简单实现：按权重展开后轮询
-        std::vector<size_t> expanded;
-        for (size_t i = 0; i < endpoints.size(); ++i) {
-            for (uint32_t w = 0; w < endpoints[i].weight / 10; ++w) {
-                expanded.push_back(i);
-            }
-        }
-
-        if (expanded.empty()) {
-            return &endpoints[0];
-        }
-
-        size_t idx = m_index.fetch_add(1, std::memory_order_relaxed) % expanded.size();
-        return &endpoints[expanded[idx]];
-    }
-
-    void update(const std::vector<ServiceEndpoint>& /*endpoints*/) {
-        // 可以在这里预计算权重
-    }
-
-private:
-    std::atomic<size_t> m_index{0};
-};
-
-// 验证选择器满足ServiceSelector concept
-static_assert(ServiceSelector<RoundRobinSelector>, "RoundRobinSelector must satisfy ServiceSelector concept");
-static_assert(ServiceSelector<RandomSelector>, "RandomSelector must satisfy ServiceSelector concept");
-static_assert(ServiceSelector<WeightedRoundRobinSelector>, "WeightedRoundRobinSelector must satisfy ServiceSelector concept");
+// 使用 galay-kernel 的负载均衡策略
+using RoundRobinSelector = details::RoundRobinLoadBalancer<ServiceEndpoint>;
+using RandomSelector = details::RandomLoadBalancer<ServiceEndpoint>;
+using WeightedRoundRobinSelector = details::WeightRoundRobinLoadBalancer<ServiceEndpoint>;
+using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoint>;
 
 /**
  * @brief 服务发现客户端
  *
  * @tparam Registry 服务注册中心类型，必须满足ServiceRegistry concept
- * @tparam Selector 服务选择器类型，必须满足ServiceSelector concept
+ * @tparam Selector 服务选择器类型（使用 galay-kernel 的负载均衡器）
  */
-template<ServiceRegistry Registry, ServiceSelector Selector = RoundRobinSelector>
+template<ServiceRegistry Registry, typename Selector = RoundRobinSelector>
 class ServiceDiscoveryClient {
 public:
     explicit ServiceDiscoveryClient(Registry& registry)
-        : m_registry(registry) {}
+        : m_registry(registry), m_selector() {}
 
     /**
      * @brief 获取服务实例
@@ -512,7 +426,13 @@ public:
         }
 
         auto& endpoints = result.value();
-        const ServiceEndpoint* selected = m_selector.select(endpoints);
+        if (endpoints.empty()) {
+            return std::unexpected(DiscoveryError(DiscoveryError::NOT_FOUND, "No available instance"));
+        }
+
+        // 更新选择器的节点列表并选择
+        m_selector = Selector(endpoints);
+        auto selected = m_selector.select();
 
         if (!selected) {
             return std::unexpected(DiscoveryError(DiscoveryError::NOT_FOUND, "No available instance"));

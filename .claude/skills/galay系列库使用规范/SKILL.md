@@ -37,7 +37,7 @@ Runtime runtime;
 runtime.start();
 
 // 或指定调度器数量
-Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 4, 8);  // 4 IO + 8 计算
+Runtime runtime(4, 8);  // 4 IO + 8 计算
 
 // 获取调度器（负载均衡）
 auto* io_scheduler = runtime.getNextIOScheduler();

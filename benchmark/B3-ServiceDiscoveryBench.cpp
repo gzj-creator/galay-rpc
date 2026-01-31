@@ -103,7 +103,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Duration: " << duration_sec << " seconds\n";
     std::cout << "IO Schedulers: " << io_schedulers << "\n\n";
 
-    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, io_schedulers, 1);
+    Runtime runtime(io_schedulers, 1);
     runtime.start();
 
     std::cout << "Starting " << num_workers << " workers...\n";

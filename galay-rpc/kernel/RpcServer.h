@@ -63,8 +63,7 @@ public:
      */
     explicit RpcServer(const RpcServerConfig& config)
         : m_config(config)
-        , m_runtime(LoadBalanceStrategy::ROUND_ROBIN,
-                    config.io_scheduler_count,
+        , m_runtime(config.io_scheduler_count,
                     config.compute_scheduler_count) {}
 
     ~RpcServer() {

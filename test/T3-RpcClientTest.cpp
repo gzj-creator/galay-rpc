@@ -182,7 +182,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "RPC Client Test - Connecting to " << host << ":" << port << "\n";
 
-    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 1, 1);
+    Runtime runtime(1, 1);
     runtime.start();
 
     auto* scheduler = runtime.getNextIOScheduler();
