@@ -1,0 +1,19 @@
+# Build
+build/
+cmake-build-*/
+
+# Cache
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test results
+*.result
+
+# OS
+.DS_Store

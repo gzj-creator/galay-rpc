@@ -1,0 +1,155 @@
+/**
+ * @file T1-RpcProtocolTest.cpp
+ * @brief RPC协议测试
+ */
+
+#include "test_result_writer.h"
+#include "galay-rpc/protoc/RpcMessage.h"
+#include "galay-rpc/protoc/RpcCodec.h"
+#include <iostream>
+#include <cstring>
+
+using namespace galay::rpc;
+
+void testRpcHeader(test::TestResultWriter& writer) {
+    RpcHeader header;
+    header.m_type = static_cast<uint8_t>(RpcMessageType::REQUEST);
+    header.m_request_id = 12345;
+    header.m_body_length = 100;
+
+    char buffer[RPC_HEADER_SIZE];
+    header.serialize(buffer);
+
+    RpcHeader parsed;
+    bool success = parsed.deserialize(buffer);
+
+    writer.writeTestCase("RpcHeader serialize/deserialize",
+        success &&
+        parsed.m_magic == RPC_MAGIC &&
+        parsed.m_version == RPC_VERSION &&
+        parsed.m_type == static_cast<uint8_t>(RpcMessageType::REQUEST) &&
+        parsed.m_request_id == 12345 &&
+        parsed.m_body_length == 100);
+}
+
+void testRpcRequest(test::TestResultWriter& writer) {
+    RpcRequest request(1001, "TestService", "testMethod");
+    std::string payload = "Hello, RPC!";
+    request.payload(payload.data(), payload.size());
+
+    auto serialized = request.serialize();
+
+    auto result = RpcCodec::decodeRequest(serialized.data(), serialized.size());
+
+    writer.writeTestCase("RpcRequest serialize/deserialize",
+        result.has_value() &&
+        result->requestId() == 1001 &&
+        result->serviceName() == "TestService" &&
+        result->methodName() == "testMethod" &&
+        std::string(result->payload().data(), result->payload().size()) == payload);
+}
+
+void testRpcResponse(test::TestResultWriter& writer) {
+    RpcResponse response(2001, RpcErrorCode::OK);
+    std::string payload = "Response data";
+    response.payload(payload.data(), payload.size());
+
+    auto serialized = response.serialize();
+
+    auto result = RpcCodec::decodeResponse(serialized.data(), serialized.size());
+
+    writer.writeTestCase("RpcResponse serialize/deserialize",
+        result.has_value() &&
+        result->requestId() == 2001 &&
+        result->errorCode() == RpcErrorCode::OK &&
+        std::string(result->payload().data(), result->payload().size()) == payload);
+}
+
+void testRpcResponseError(test::TestResultWriter& writer) {
+    RpcResponse response(3001, RpcErrorCode::SERVICE_NOT_FOUND);
+
+    auto serialized = response.serialize();
+    auto result = RpcCodec::decodeResponse(serialized.data(), serialized.size());
+
+    writer.writeTestCase("RpcResponse error code",
+        result.has_value() &&
+        result->requestId() == 3001 &&
+        result->errorCode() == RpcErrorCode::SERVICE_NOT_FOUND &&
+        !result->isOk());
+}
+
+void testMessageLength(test::TestResultWriter& writer) {
+    RpcRequest request(100, "Svc", "Method");
+    auto serialized = request.serialize();
+
+    size_t len = RpcCodec::messageLength(serialized.data(), serialized.size());
+
+    writer.writeTestCase("RpcCodec messageLength",
+        len == serialized.size());
+}
+
+void testInvalidHeader(test::TestResultWriter& writer) {
+    char invalid_data[RPC_HEADER_SIZE] = {0};
+
+    RpcHeader header;
+    bool success = header.deserialize(invalid_data);
+
+    writer.writeTestCase("Invalid header detection", !success);
+}
+
+void testIncompleteData(test::TestResultWriter& writer) {
+    char partial_data[8] = {0};
+
+    RpcHeader header;
+    auto result = RpcCodec::decodeHeader(partial_data, 8, header);
+
+    writer.writeTestCase("Incomplete data detection",
+        result == DecodeResult::INCOMPLETE);
+}
+
+void testEmptyPayload(test::TestResultWriter& writer) {
+    RpcRequest request(500, "EmptyService", "emptyMethod");
+    auto serialized = request.serialize();
+
+    auto result = RpcCodec::decodeRequest(serialized.data(), serialized.size());
+
+    writer.writeTestCase("Empty payload request",
+        result.has_value() &&
+        result->payload().empty());
+}
+
+void testLargePayload(test::TestResultWriter& writer) {
+    RpcRequest request(600, "LargeService", "largeMethod");
+    std::vector<char> large_payload(1024 * 1024, 'X');  // 1MB
+    request.payload(large_payload.data(), large_payload.size());
+
+    auto serialized = request.serialize();
+    auto result = RpcCodec::decodeRequest(serialized.data(), serialized.size());
+
+    writer.writeTestCase("Large payload (1MB)",
+        result.has_value() &&
+        result->payload().size() == large_payload.size());
+}
+
+int main() {
+    test::TestResultWriter writer("T1-RpcProtocolTest.result");
+
+    std::cout << "Running RPC Protocol Tests...\n";
+
+    testRpcHeader(writer);
+    testRpcRequest(writer);
+    testRpcResponse(writer);
+    testRpcResponseError(writer);
+    testMessageLength(writer);
+    testInvalidHeader(writer);
+    testIncompleteData(writer);
+    testEmptyPayload(writer);
+    testLargePayload(writer);
+
+    writer.writeSummary();
+
+    std::cout << "Tests completed. Passed: " << writer.passed()
+              << ", Failed: " << writer.failed() << "\n";
+
+    return writer.failed() > 0 ? 1 : 0;
+}

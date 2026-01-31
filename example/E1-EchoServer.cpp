@@ -1,0 +1,112 @@
+/**
+ * @file E1-EchoServer.cpp
+ * @brief Echo RPC服务端示例
+ *
+ * @details 演示如何创建一个简单的RPC服务端
+ *
+ * 使用方法:
+ *   ./E1-EchoServer [port]
+ *
+ * 示例:
+ *   ./E1-EchoServer 9000
+ */
+
+#include "galay-rpc/kernel/RpcServer.h"
+#include "galay-rpc/kernel/RpcService.h"
+#include <iostream>
+#include <csignal>
+#include <atomic>
+
+using namespace galay::rpc;
+using namespace galay::kernel;
+
+/**
+ * @brief Echo服务实现
+ */
+class EchoService : public RpcService {
+public:
+    EchoService() : RpcService("EchoService") {
+        // 注册方法
+        registerMethod("echo", &EchoService::echo);
+        registerMethod("reverse", &EchoService::reverse);
+        registerMethod("length", &EchoService::length);
+    }
+
+    /**
+     * @brief Echo方法 - 原样返回输入
+     */
+    Coroutine echo(RpcContext& ctx) {
+        auto& req = ctx.request();
+        ctx.setPayload(req.payload().data(), req.payload().size());
+        co_return;
+    }
+
+    /**
+     * @brief Reverse方法 - 反转字符串
+     */
+    Coroutine reverse(RpcContext& ctx) {
+        auto& payload = ctx.request().payload();
+        std::string data(payload.begin(), payload.end());
+        std::reverse(data.begin(), data.end());
+        ctx.setPayload(data);
+        co_return;
+    }
+
+    /**
+     * @brief Length方法 - 返回字符串长度
+     */
+    Coroutine length(RpcContext& ctx) {
+        auto& payload = ctx.request().payload();
+        uint32_t len = static_cast<uint32_t>(payload.size());
+        ctx.setPayload(reinterpret_cast<char*>(&len), sizeof(len));
+        co_return;
+    }
+};
+
+std::atomic<bool> g_running{true};
+
+void signalHandler(int) {
+    g_running.store(false);
+}
+
+int main(int argc, char* argv[]) {
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+
+    uint16_t port = 9000;
+    if (argc > 1) {
+        port = static_cast<uint16_t>(std::atoi(argv[1]));
+    }
+
+    std::cout << "=== Echo RPC Server Example ===\n\n";
+
+    // 创建服务
+    auto echoService = std::make_shared<EchoService>();
+
+    // 配置服务器
+    RpcServerConfig config;
+    config.host = "0.0.0.0";
+    config.port = port;
+
+    // 创建并启动服务器
+    RpcServer server(config);
+    server.registerService(echoService);
+    server.start();
+
+    std::cout << "Server listening on port " << port << "\n";
+    std::cout << "Available methods:\n";
+    std::cout << "  - EchoService.echo(data) -> data\n";
+    std::cout << "  - EchoService.reverse(data) -> reversed data\n";
+    std::cout << "  - EchoService.length(data) -> length (uint32)\n";
+    std::cout << "\nPress Ctrl+C to stop.\n";
+
+    // 等待停止信号
+    while (g_running.load() && server.isRunning()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    server.stop();
+    std::cout << "\nServer stopped.\n";
+
+    return 0;
+}
