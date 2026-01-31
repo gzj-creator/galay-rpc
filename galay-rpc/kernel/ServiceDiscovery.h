@@ -228,163 +228,31 @@ static_assert(ServiceRegistry<LocalServiceRegistry>, "LocalServiceRegistry must 
  * @brief 异步服务注册中心 Concept
  *
  * @details 定义异步服务注册中心必须实现的接口，用于协程环境。
- * 所有方法返回Awaitable引用，支持co_await，减少等待体创建开销。
+ * 所有方法返回Coroutine，支持co_await。
  */
-template<typename T, typename RegisterAwaitable, typename DeregisterAwaitable,
-         typename DiscoverAwaitable, typename WatchAwaitable, typename UnwatchAwaitable>
+template<typename T>
 concept AsyncServiceRegistry = requires(T registry,
                                         const std::string& service_name,
                                         const ServiceEndpoint& endpoint,
                                         ServiceWatchCallback callback) {
     // 异步注册服务
-    { registry.registerServiceAsync(endpoint) } -> std::same_as<RegisterAwaitable&>;
+    { registry.registerServiceAsync(endpoint) } -> std::same_as<kernel::Coroutine>;
 
     // 异步注销服务
-    { registry.deregisterServiceAsync(endpoint) } -> std::same_as<DeregisterAwaitable&>;
+    { registry.deregisterServiceAsync(endpoint) } -> std::same_as<kernel::Coroutine>;
 
     // 异步发现服务
-    { registry.discoverServiceAsync(service_name) } -> std::same_as<DiscoverAwaitable&>;
+    { registry.discoverServiceAsync(service_name) } -> std::same_as<kernel::Coroutine>;
 
     // 异步监听服务变更
-    { registry.watchServiceAsync(service_name, callback) } -> std::same_as<WatchAwaitable&>;
+    { registry.watchServiceAsync(service_name, callback) } -> std::same_as<kernel::Coroutine>;
 
     // 异步取消监听
-    { registry.unwatchServiceAsync(service_name) } -> std::same_as<UnwatchAwaitable&>;
-};
+    { registry.unwatchServiceAsync(service_name) } -> std::same_as<kernel::Coroutine>;
 
-// 前向声明
-class AsyncLocalServiceRegistry;
-
-/**
- * @brief 服务注册等待体基类
- */
-class ServiceRegistryAwaitableBase {
-public:
-    virtual ~ServiceRegistryAwaitableBase() = default;
-
-    bool await_ready() const noexcept { return false; }
-
-    DiscoveryError lastError() const { return m_error; }
-
-    void reset() {
-        m_state = State::AcquireLock;
-        m_error = DiscoveryError();
-        m_lock_awaitable.reset();
-    }
-
-protected:
-    enum class State {
-        AcquireLock,
-        Execute,
-        Done
-    };
-
-    State m_state = State::AcquireLock;
-    DiscoveryError m_error;
-    std::optional<kernel::AsyncMutexAwaitable> m_lock_awaitable;
-};
-
-/**
- * @brief 注册服务等待体
- */
-class RegisterServiceAwaitable : public ServiceRegistryAwaitableBase {
-public:
-    RegisterServiceAwaitable(AsyncLocalServiceRegistry& registry) : m_registry(registry) {}
-
-    RegisterServiceAwaitable& setEndpoint(const ServiceEndpoint& endpoint) {
-        m_endpoint = endpoint;
-        return *this;
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<void, DiscoveryError> await_resume();
-
-private:
-    AsyncLocalServiceRegistry& m_registry;
-    ServiceEndpoint m_endpoint;
-};
-
-/**
- * @brief 注销服务等待体
- */
-class DeregisterServiceAwaitable : public ServiceRegistryAwaitableBase {
-public:
-    DeregisterServiceAwaitable(AsyncLocalServiceRegistry& registry) : m_registry(registry) {}
-
-    DeregisterServiceAwaitable& setEndpoint(const ServiceEndpoint& endpoint) {
-        m_endpoint = endpoint;
-        return *this;
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<void, DiscoveryError> await_resume();
-
-private:
-    AsyncLocalServiceRegistry& m_registry;
-    ServiceEndpoint m_endpoint;
-};
-
-/**
- * @brief 发现服务等待体
- */
-class DiscoverServiceAwaitable : public ServiceRegistryAwaitableBase {
-public:
-    DiscoverServiceAwaitable(AsyncLocalServiceRegistry& registry) : m_registry(registry) {}
-
-    DiscoverServiceAwaitable& setServiceName(const std::string& name) {
-        m_service_name = name;
-        return *this;
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<std::vector<ServiceEndpoint>, DiscoveryError> await_resume();
-
-private:
-    AsyncLocalServiceRegistry& m_registry;
-    std::string m_service_name;
-    std::vector<ServiceEndpoint> m_result;
-};
-
-/**
- * @brief 监听服务等待体
- */
-class WatchServiceAwaitable : public ServiceRegistryAwaitableBase {
-public:
-    WatchServiceAwaitable(AsyncLocalServiceRegistry& registry) : m_registry(registry) {}
-
-    WatchServiceAwaitable& set(const std::string& name, ServiceWatchCallback cb) {
-        m_service_name = name;
-        m_callback = std::move(cb);
-        return *this;
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<void, DiscoveryError> await_resume();
-
-private:
-    AsyncLocalServiceRegistry& m_registry;
-    std::string m_service_name;
-    ServiceWatchCallback m_callback;
-};
-
-/**
- * @brief 取消监听等待体
- */
-class UnwatchServiceAwaitable : public ServiceRegistryAwaitableBase {
-public:
-    UnwatchServiceAwaitable(AsyncLocalServiceRegistry& registry) : m_registry(registry) {}
-
-    UnwatchServiceAwaitable& setServiceName(const std::string& name) {
-        m_service_name = name;
-        return *this;
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<void, DiscoveryError> await_resume();
-
-private:
-    AsyncLocalServiceRegistry& m_registry;
-    std::string m_service_name;
+    // 获取最后一次操作的结果
+    { registry.lastError() } -> std::same_as<DiscoveryError>;
+    { registry.lastEndpoints() } -> std::same_as<std::vector<ServiceEndpoint>>;
 };
 
 /**
@@ -392,242 +260,157 @@ private:
  *
  * @details 使用AsyncMutex实现的协程友好服务注册中心。
  * 适用于协程环境，不会阻塞线程。
- * 所有异步方法返回Awaitable引用，减少等待体创建开销。
  */
 class AsyncLocalServiceRegistry {
 public:
-    AsyncLocalServiceRegistry()
-        : m_register_awaitable(*this)
-        , m_deregister_awaitable(*this)
-        , m_discover_awaitable(*this)
-        , m_watch_awaitable(*this)
-        , m_unwatch_awaitable(*this)
-    {}
+    AsyncLocalServiceRegistry() = default;
     ~AsyncLocalServiceRegistry() = default;
 
     /**
      * @brief 异步注册服务
      */
-    RegisterServiceAwaitable& registerServiceAsync(const ServiceEndpoint& endpoint) {
-        m_register_awaitable.reset();
-        return m_register_awaitable.setEndpoint(endpoint);
+    kernel::Coroutine registerServiceAsync(const ServiceEndpoint& endpoint) {
+        auto lock_result = co_await m_mutex.lock();
+        if (!lock_result) {
+            m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
+            co_return;
+        }
+
+        m_services[endpoint.service_name].push_back(endpoint);
+
+        // 触发回调
+        if (auto it = m_watchers.find(endpoint.service_name); it != m_watchers.end()) {
+            ServiceEvent event{ServiceEventType::ADDED, endpoint};
+            for (auto& callback : it->second) {
+                callback(event);
+            }
+        }
+
+        m_last_error = DiscoveryError();
+        m_mutex.unlock();
+        co_return;
     }
 
     /**
      * @brief 异步注销服务
      */
-    DeregisterServiceAwaitable& deregisterServiceAsync(const ServiceEndpoint& endpoint) {
-        m_deregister_awaitable.reset();
-        return m_deregister_awaitable.setEndpoint(endpoint);
+    kernel::Coroutine deregisterServiceAsync(const ServiceEndpoint& endpoint) {
+        auto lock_result = co_await m_mutex.lock();
+        if (!lock_result) {
+            m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
+            co_return;
+        }
+
+        auto it = m_services.find(endpoint.service_name);
+        if (it == m_services.end()) {
+            m_last_error = DiscoveryError(DiscoveryError::NOT_FOUND, "Service not found");
+            m_mutex.unlock();
+            co_return;
+        }
+
+        auto& endpoints = it->second;
+        auto ep_it = std::find_if(endpoints.begin(), endpoints.end(),
+            [&](const ServiceEndpoint& ep) {
+                return ep.instance_id == endpoint.instance_id;
+            });
+
+        if (ep_it == endpoints.end()) {
+            m_last_error = DiscoveryError(DiscoveryError::NOT_FOUND, "Instance not found");
+            m_mutex.unlock();
+            co_return;
+        }
+
+        ServiceEndpoint removed = *ep_it;
+        endpoints.erase(ep_it);
+
+        // 触发回调
+        if (auto wit = m_watchers.find(endpoint.service_name); wit != m_watchers.end()) {
+            ServiceEvent event{ServiceEventType::REMOVED, removed};
+            for (auto& callback : wit->second) {
+                callback(event);
+            }
+        }
+
+        m_last_error = DiscoveryError();
+        m_mutex.unlock();
+        co_return;
     }
 
     /**
      * @brief 异步发现服务
      */
-    DiscoverServiceAwaitable& discoverServiceAsync(const std::string& service_name) {
-        m_discover_awaitable.reset();
-        return m_discover_awaitable.setServiceName(service_name);
+    kernel::Coroutine discoverServiceAsync(const std::string& service_name) {
+        auto lock_result = co_await m_mutex.lock();
+        if (!lock_result) {
+            m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
+            m_last_endpoints.clear();
+            co_return;
+        }
+
+        auto it = m_services.find(service_name);
+        if (it == m_services.end()) {
+            m_last_endpoints.clear();
+        } else {
+            m_last_endpoints = it->second;
+        }
+
+        m_last_error = DiscoveryError();
+        m_mutex.unlock();
+        co_return;
     }
 
     /**
      * @brief 异步监听服务变更
      */
-    WatchServiceAwaitable& watchServiceAsync(const std::string& service_name, ServiceWatchCallback callback) {
-        m_watch_awaitable.reset();
-        return m_watch_awaitable.set(service_name, std::move(callback));
+    kernel::Coroutine watchServiceAsync(const std::string& service_name, ServiceWatchCallback callback) {
+        auto lock_result = co_await m_mutex.lock();
+        if (!lock_result) {
+            m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
+            co_return;
+        }
+
+        m_watchers[service_name].push_back(std::move(callback));
+        m_last_error = DiscoveryError();
+        m_mutex.unlock();
+        co_return;
     }
 
     /**
      * @brief 异步取消监听
      */
-    UnwatchServiceAwaitable& unwatchServiceAsync(const std::string& service_name) {
-        m_unwatch_awaitable.reset();
-        return m_unwatch_awaitable.setServiceName(service_name);
+    kernel::Coroutine unwatchServiceAsync(const std::string& service_name) {
+        auto lock_result = co_await m_mutex.lock();
+        if (!lock_result) {
+            m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
+            co_return;
+        }
+
+        m_watchers.erase(service_name);
+        m_last_error = DiscoveryError();
+        m_mutex.unlock();
+        co_return;
     }
 
-    // 内部访问
-    kernel::AsyncMutex& mutex() { return m_mutex; }
-    std::unordered_map<std::string, std::vector<ServiceEndpoint>>& services() { return m_services; }
-    std::unordered_map<std::string, std::vector<ServiceWatchCallback>>& watchers() { return m_watchers; }
+    /**
+     * @brief 获取最后一次操作的错误
+     */
+    DiscoveryError lastError() const { return m_last_error; }
+
+    /**
+     * @brief 获取最后一次发现的端点列表
+     */
+    std::vector<ServiceEndpoint> lastEndpoints() const { return m_last_endpoints; }
 
 private:
     kernel::AsyncMutex m_mutex;
     std::unordered_map<std::string, std::vector<ServiceEndpoint>> m_services;
     std::unordered_map<std::string, std::vector<ServiceWatchCallback>> m_watchers;
-
-    RegisterServiceAwaitable m_register_awaitable;
-    DeregisterServiceAwaitable m_deregister_awaitable;
-    DiscoverServiceAwaitable m_discover_awaitable;
-    WatchServiceAwaitable m_watch_awaitable;
-    UnwatchServiceAwaitable m_unwatch_awaitable;
+    DiscoveryError m_last_error;
+    std::vector<ServiceEndpoint> m_last_endpoints;
 };
 
-// Awaitable 实现
-
-inline bool RegisterServiceAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (m_state == State::AcquireLock) {
-        m_lock_awaitable.emplace(m_registry.mutex().lock());
-        m_state = State::Execute;
-        return m_lock_awaitable->await_suspend(
-            std::coroutine_handle<kernel::Coroutine::promise_type>::from_address(handle.address()));
-    }
-    return false;
-}
-
-inline std::expected<void, DiscoveryError> RegisterServiceAwaitable::await_resume() {
-    auto lock_result = m_lock_awaitable->await_resume();
-    if (!lock_result) {
-        m_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    m_registry.services()[m_endpoint.service_name].push_back(m_endpoint);
-
-    if (auto it = m_registry.watchers().find(m_endpoint.service_name); it != m_registry.watchers().end()) {
-        ServiceEvent event{ServiceEventType::ADDED, m_endpoint};
-        for (auto& callback : it->second) {
-            callback(event);
-        }
-    }
-
-    m_registry.mutex().unlock();
-    reset();
-    return {};
-}
-
-inline bool DeregisterServiceAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (m_state == State::AcquireLock) {
-        m_lock_awaitable.emplace(m_registry.mutex().lock());
-        m_state = State::Execute;
-        return m_lock_awaitable->await_suspend(
-            std::coroutine_handle<kernel::Coroutine::promise_type>::from_address(handle.address()));
-    }
-    return false;
-}
-
-inline std::expected<void, DiscoveryError> DeregisterServiceAwaitable::await_resume() {
-    auto lock_result = m_lock_awaitable->await_resume();
-    if (!lock_result) {
-        m_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    auto it = m_registry.services().find(m_endpoint.service_name);
-    if (it == m_registry.services().end()) {
-        m_registry.mutex().unlock();
-        m_error = DiscoveryError(DiscoveryError::NOT_FOUND, "Service not found");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    auto& endpoints = it->second;
-    auto ep_it = std::find_if(endpoints.begin(), endpoints.end(),
-        [&](const ServiceEndpoint& ep) { return ep.instance_id == m_endpoint.instance_id; });
-
-    if (ep_it == endpoints.end()) {
-        m_registry.mutex().unlock();
-        m_error = DiscoveryError(DiscoveryError::NOT_FOUND, "Instance not found");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    ServiceEndpoint removed = *ep_it;
-    endpoints.erase(ep_it);
-
-    if (auto wit = m_registry.watchers().find(m_endpoint.service_name); wit != m_registry.watchers().end()) {
-        ServiceEvent event{ServiceEventType::REMOVED, removed};
-        for (auto& callback : wit->second) {
-            callback(event);
-        }
-    }
-
-    m_registry.mutex().unlock();
-    reset();
-    return {};
-}
-
-inline bool DiscoverServiceAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (m_state == State::AcquireLock) {
-        m_lock_awaitable.emplace(m_registry.mutex().lock());
-        m_state = State::Execute;
-        return m_lock_awaitable->await_suspend(
-            std::coroutine_handle<kernel::Coroutine::promise_type>::from_address(handle.address()));
-    }
-    return false;
-}
-
-inline std::expected<std::vector<ServiceEndpoint>, DiscoveryError> DiscoverServiceAwaitable::await_resume() {
-    auto lock_result = m_lock_awaitable->await_resume();
-    if (!lock_result) {
-        m_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    auto it = m_registry.services().find(m_service_name);
-    if (it == m_registry.services().end()) {
-        m_result.clear();
-    } else {
-        m_result = it->second;
-    }
-
-    m_registry.mutex().unlock();
-    auto result = std::move(m_result);
-    reset();
-    return result;
-}
-
-inline bool WatchServiceAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (m_state == State::AcquireLock) {
-        m_lock_awaitable.emplace(m_registry.mutex().lock());
-        m_state = State::Execute;
-        return m_lock_awaitable->await_suspend(
-            std::coroutine_handle<kernel::Coroutine::promise_type>::from_address(handle.address()));
-    }
-    return false;
-}
-
-inline std::expected<void, DiscoveryError> WatchServiceAwaitable::await_resume() {
-    auto lock_result = m_lock_awaitable->await_resume();
-    if (!lock_result) {
-        m_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    m_registry.watchers()[m_service_name].push_back(std::move(m_callback));
-
-    m_registry.mutex().unlock();
-    reset();
-    return {};
-}
-
-inline bool UnwatchServiceAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (m_state == State::AcquireLock) {
-        m_lock_awaitable.emplace(m_registry.mutex().lock());
-        m_state = State::Execute;
-        return m_lock_awaitable->await_suspend(
-            std::coroutine_handle<kernel::Coroutine::promise_type>::from_address(handle.address()));
-    }
-    return false;
-}
-
-inline std::expected<void, DiscoveryError> UnwatchServiceAwaitable::await_resume() {
-    auto lock_result = m_lock_awaitable->await_resume();
-    if (!lock_result) {
-        m_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
-        reset();
-        return std::unexpected(m_error);
-    }
-
-    m_registry.watchers().erase(m_service_name);
-
-    m_registry.mutex().unlock();
-    reset();
-    return {};
-}
+// 验证AsyncLocalServiceRegistry满足AsyncServiceRegistry concept
+static_assert(AsyncServiceRegistry<AsyncLocalServiceRegistry>, "AsyncLocalServiceRegistry must satisfy AsyncServiceRegistry concept");
 
 /**
  * @brief 轮询选择器
