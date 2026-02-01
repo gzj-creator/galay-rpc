@@ -1,6 +1,6 @@
 /**
  * @file B2-RpcBenchClient.cpp
- * @brief RPC压测客户端
+ * @brief RPC压测客户端（含P99延迟统计）
  */
 
 #include "galay-rpc/kernel/RpcClient.h"
@@ -12,6 +12,8 @@
 #include <thread>
 #include <csignal>
 #include <iomanip>
+#include <algorithm>
+#include <mutex>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
@@ -30,6 +32,10 @@ std::atomic<uint64_t> g_total_errors{0};
 std::atomic<uint64_t> g_total_bytes{0};
 std::atomic<bool> g_running{true};
 
+// 延迟统计
+std::mutex g_latency_mutex;
+std::vector<uint64_t> g_latencies;  // 微秒
+
 void signalHandler(int) {
     g_running.store(false);
 }
@@ -37,16 +43,34 @@ void signalHandler(int) {
 Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker_id) {
     RpcClient client;
 
-    auto connect_result = co_await client.connect(config.host, config.port);
+    // 连接重试，最多15次，间隔30秒
+    int retry_count = 0;
+    const int max_retries = 15;
+    const int retry_interval_sec = 30;
 
-    if (!connect_result) {
+    while (retry_count < max_retries) {
+        auto connect_result = co_await client.connect(config.host, config.port);
+        if (connect_result) {
+            break;
+        }
+        retry_count++;
+        if (retry_count < max_retries) {
+            std::this_thread::sleep_for(std::chrono::seconds(retry_interval_sec));
+        }
+    }
+
+    if (retry_count >= max_retries) {
         g_total_errors.fetch_add(1, std::memory_order_relaxed);
         co_return;
     }
 
     std::string payload(config.payload_size, 'X');
+    std::vector<uint64_t> local_latencies;
+    local_latencies.reserve(10000);
 
     while (g_running.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+
         while (true) {
             auto result = co_await client.call("BenchEchoService", "echo", payload);
             if (!result) {
@@ -56,6 +80,10 @@ Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker
             if (result.value()) {
                 auto& response = result.value().value();
                 if (response.isOk()) {
+                    auto end = std::chrono::steady_clock::now();
+                    auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                    local_latencies.push_back(latency_us);
+
                     g_total_requests.fetch_add(1, std::memory_order_relaxed);
                     g_total_bytes.fetch_add(payload.size() * 2, std::memory_order_relaxed);
                 } else {
@@ -64,6 +92,12 @@ Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker
                 break;
             }
         }
+    }
+
+    // 合并本地延迟数据
+    if (!local_latencies.empty()) {
+        std::lock_guard<std::mutex> lock(g_latency_mutex);
+        g_latencies.insert(g_latencies.end(), local_latencies.begin(), local_latencies.end());
     }
 
     co_await client.close();
@@ -174,6 +208,33 @@ int main(int argc, char* argv[]) {
     std::cout << "Average QPS: " << std::fixed << std::setprecision(0) << avg_qps << "\n";
     std::cout << "Average Throughput: " << std::fixed << std::setprecision(2) << avg_throughput << " MB/s\n";
     std::cout << "Error Rate: " << std::fixed << std::setprecision(2) << error_rate << "%\n";
+
+    // 计算延迟百分位数
+    if (!g_latencies.empty()) {
+        std::sort(g_latencies.begin(), g_latencies.end());
+        size_t n = g_latencies.size();
+
+        auto p50 = g_latencies[n * 50 / 100];
+        auto p90 = g_latencies[n * 90 / 100];
+        auto p95 = g_latencies[n * 95 / 100];
+        auto p99 = g_latencies[n * 99 / 100];
+        auto p999 = g_latencies[std::min(n * 999 / 1000, n - 1)];
+        auto max_lat = g_latencies[n - 1];
+
+        uint64_t sum = 0;
+        for (auto lat : g_latencies) sum += lat;
+        double avg_lat = static_cast<double>(sum) / n;
+
+        std::cout << "\n=== Latency (microseconds) ===\n";
+        std::cout << "Samples: " << n << "\n";
+        std::cout << "Avg:  " << std::fixed << std::setprecision(0) << avg_lat << " us\n";
+        std::cout << "P50:  " << p50 << " us\n";
+        std::cout << "P90:  " << p90 << " us\n";
+        std::cout << "P95:  " << p95 << " us\n";
+        std::cout << "P99:  " << p99 << " us\n";
+        std::cout << "P99.9: " << p999 << " us\n";
+        std::cout << "Max:  " << max_lat << " us\n";
+    }
 
     return 0;
 }
