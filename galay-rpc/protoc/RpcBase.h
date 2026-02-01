@@ -19,10 +19,15 @@ namespace galay::rpc
  * @brief RPC消息类型
  */
 enum class RpcMessageType : uint8_t {
-    REQUEST = 0x01,      ///< 请求
-    RESPONSE = 0x02,     ///< 响应
-    HEARTBEAT = 0x03,    ///< 心跳
-    ERROR = 0x04,        ///< 错误
+    REQUEST = 0x01,          ///< 普通请求
+    RESPONSE = 0x02,         ///< 普通响应
+    HEARTBEAT = 0x03,        ///< 心跳
+    ERROR = 0x04,            ///< 错误
+    STREAM_INIT = 0x10,      ///< 流初始化请求
+    STREAM_INIT_ACK = 0x11,  ///< 流初始化确认
+    STREAM_DATA = 0x12,      ///< 流数据
+    STREAM_END = 0x13,       ///< 流结束
+    STREAM_CANCEL = 0x14,    ///< 流取消
 };
 
 /**

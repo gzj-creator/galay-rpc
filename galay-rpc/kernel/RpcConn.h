@@ -382,12 +382,229 @@ private:
 };
 
 /**
+ * @brief 发送原始数据等待体（用于流式传输）
+ */
+template<typename SocketType>
+class SendRawDataAwaitable : public TimeoutSupport<SendRawDataAwaitable<SocketType>>
+{
+public:
+    using WritevAwaitableType = decltype(std::declval<SocketType>().writev(std::declval<std::vector<iovec>>()));
+
+    SendRawDataAwaitable(std::vector<char>&& data, SocketType& socket)
+        : m_socket(socket)
+        , m_data(std::move(data))
+        , m_sent(0)
+    {
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    template<typename Handle>
+    auto await_suspend(Handle handle) {
+        if (!m_writev_awaitable) {
+            std::vector<iovec> iovecs(1);
+            iovecs[0].iov_base = m_data.data() + m_sent;
+            iovecs[0].iov_len = m_data.size() - m_sent;
+            m_writev_awaitable.emplace(m_socket.writev(std::move(iovecs)));
+        }
+        return m_writev_awaitable->await_suspend(handle);
+    }
+
+    std::expected<bool, RpcError> await_resume() {
+        auto writev_result = m_writev_awaitable->await_resume();
+        m_writev_awaitable.reset();
+
+        if (!writev_result) {
+            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Send failed"));
+        }
+
+        m_sent += writev_result.value();
+
+        if (m_sent >= m_data.size()) {
+            return true;
+        }
+
+        return false;
+    }
+
+private:
+    SocketType& m_socket;
+    std::vector<char> m_data;
+    size_t m_sent;
+    std::optional<WritevAwaitableType> m_writev_awaitable;
+};
+
+/**
+ * @brief 读取消息头等待体（用于流式传输）
+ */
+template<typename SocketType>
+class GetRpcHeaderAwaitable : public TimeoutSupport<GetRpcHeaderAwaitable<SocketType>>
+{
+public:
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
+    GetRpcHeaderAwaitable(RingBuffer& ring_buffer, RpcHeader& header, SocketType& socket)
+        : m_ring_buffer(ring_buffer)
+        , m_header(header)
+        , m_socket(socket)
+    {
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    template<typename Handle>
+    auto await_suspend(Handle handle) {
+        if (!m_readv_awaitable) {
+            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
+        }
+        return m_readv_awaitable->await_suspend(handle);
+    }
+
+    std::expected<bool, RpcError> await_resume() {
+        auto readv_result = m_readv_awaitable->await_resume();
+        m_readv_awaitable.reset();
+
+        if (!readv_result) {
+            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
+                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed by peer"));
+            }
+            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
+        }
+
+        ssize_t bytes_read = readv_result.value();
+        if (bytes_read == 0) {
+            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
+        }
+
+        m_ring_buffer.produce(bytes_read);
+
+        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        size_t total_readable = 0;
+        for (const auto& iov : read_iovecs) {
+            total_readable += iov.iov_len;
+        }
+
+        if (total_readable < RPC_HEADER_SIZE) {
+            return false;  // 需要继续读取
+        }
+
+        // 线性化头部数据
+        char header_buf[RPC_HEADER_SIZE];
+        size_t copied = 0;
+        for (const auto& iov : read_iovecs) {
+            size_t to_copy = std::min(iov.iov_len, RPC_HEADER_SIZE - copied);
+            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+            copied += to_copy;
+            if (copied >= RPC_HEADER_SIZE) break;
+        }
+
+        if (!m_header.deserialize(header_buf)) {
+            return std::unexpected(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
+        }
+
+        m_ring_buffer.consume(RPC_HEADER_SIZE);
+        return true;
+    }
+
+private:
+    RingBuffer& m_ring_buffer;
+    RpcHeader& m_header;
+    SocketType& m_socket;
+    std::optional<ReadvAwaitableType> m_readv_awaitable;
+};
+
+/**
+ * @brief 读取消息体等待体（用于流式传输）
+ */
+template<typename SocketType>
+class GetRpcBodyAwaitable : public TimeoutSupport<GetRpcBodyAwaitable<SocketType>>
+{
+public:
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
+    GetRpcBodyAwaitable(RingBuffer& ring_buffer, char* body, size_t body_len, SocketType& socket)
+        : m_ring_buffer(ring_buffer)
+        , m_body(body)
+        , m_body_len(body_len)
+        , m_socket(socket)
+    {
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    template<typename Handle>
+    auto await_suspend(Handle handle) {
+        if (!m_readv_awaitable) {
+            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
+        }
+        return m_readv_awaitable->await_suspend(handle);
+    }
+
+    std::expected<bool, RpcError> await_resume() {
+        auto readv_result = m_readv_awaitable->await_resume();
+        m_readv_awaitable.reset();
+
+        if (!readv_result) {
+            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
+                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed by peer"));
+            }
+            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
+        }
+
+        ssize_t bytes_read = readv_result.value();
+        if (bytes_read == 0) {
+            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
+        }
+
+        m_ring_buffer.produce(bytes_read);
+
+        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        size_t total_readable = 0;
+        for (const auto& iov : read_iovecs) {
+            total_readable += iov.iov_len;
+        }
+
+        if (total_readable < m_body_len) {
+            return false;  // 需要继续读取
+        }
+
+        // 拷贝消息体
+        size_t copied = 0;
+        for (const auto& iov : read_iovecs) {
+            size_t to_copy = std::min(iov.iov_len, m_body_len - copied);
+            std::memcpy(m_body + copied, iov.iov_base, to_copy);
+            copied += to_copy;
+            if (copied >= m_body_len) break;
+        }
+
+        m_ring_buffer.consume(m_body_len);
+        return true;
+    }
+
+private:
+    RingBuffer& m_ring_buffer;
+    char* m_body;
+    size_t m_body_len;
+    SocketType& m_socket;
+    std::optional<ReadvAwaitableType> m_readv_awaitable;
+};
+
+/**
  * @brief RPC读取器模板类
  */
 template<typename SocketType>
 class RpcReaderImpl
 {
 public:
+    using GetHeaderAwaitable = GetRpcHeaderAwaitable<SocketType>;
+    using GetBodyAwaitable = GetRpcBodyAwaitable<SocketType>;
+
     RpcReaderImpl(RingBuffer& ring_buffer, const RpcReaderSetting& setting, SocketType& socket)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
@@ -413,6 +630,20 @@ public:
         return GetRpcResponseAwaitable<SocketType>(m_ring_buffer, m_setting, response, m_socket);
     }
 
+    /**
+     * @brief 获取消息头（用于流式传输）
+     */
+    GetHeaderAwaitable getHeader(RpcHeader& header) {
+        return GetHeaderAwaitable(m_ring_buffer, header, m_socket);
+    }
+
+    /**
+     * @brief 获取消息体（用于流式传输）
+     */
+    GetBodyAwaitable getBody(char* body, size_t body_len) {
+        return GetBodyAwaitable(m_ring_buffer, body, body_len, m_socket);
+    }
+
 private:
     RingBuffer& m_ring_buffer;
     const RpcReaderSetting& m_setting;
@@ -426,6 +657,8 @@ template<typename SocketType>
 class RpcWriterImpl
 {
 public:
+    using SendRawAwaitable = SendRawDataAwaitable<SocketType>;
+
     RpcWriterImpl(const RpcWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(socket)
@@ -448,6 +681,14 @@ public:
      */
     SendRpcResponseAwaitable<SocketType> sendResponse(const RpcResponse& response) {
         return SendRpcResponseAwaitable<SocketType>(response, m_socket);
+    }
+
+    /**
+     * @brief 发送原始数据（用于流式传输）
+     */
+    SendRawAwaitable sendRaw(const char* data, size_t len) {
+        std::vector<char> buf(data, data + len);
+        return SendRawAwaitable(std::move(buf), m_socket);
     }
 
 private:
