@@ -4,12 +4,22 @@
 
 ## 性能数据
 
+### RPC 压测
+
 | 指标 | 数值 |
 |------|------|
-| QPS | **125,000+** |
-| 吞吐量 | **61 MB/s** |
+| QPS | **90,000+** |
+| 吞吐量 | **44 MB/s** |
 | 错误率 | **0%** |
-| 测试配置 | 50连接, 256字节payload, 4个IO调度器 |
+| 测试配置 | 100连接, 256字节payload, 2个IO调度器 |
+
+### ServiceDiscovery 压测
+
+| 指标 | 数值 |
+|------|------|
+| OPS | **2,700,000+** |
+| 错误率 | **0%** |
+| 测试配置 | 100 workers, 2个IO调度器 |
 
 ## 核心特性
 
@@ -32,7 +42,7 @@
 - **Concept约束**: 使用 C++20 concept 定义服务发现接口
 - **本地注册**: 内置 LocalServiceRegistry 用于单机部署
 - **可扩展**: 支持 etcd、consul 等注册中心（实现 ServiceRegistry concept 即可）
-- **负载均衡**: 内置轮询、随机、加权轮询选择器
+- **负载均衡**: 使用 galay-kernel 内置的轮询、随机、加权轮询、加权随机选择器
 
 ### 协议设计
 - **二进制协议**: 高效的二进制消息格式
@@ -328,12 +338,14 @@ concept ServiceRegistry = requires(T registry, ...) {
 
 ### ServiceSelector Concept
 
+已移除，现在直接使用 galay-kernel 的负载均衡器：
+
 ```cpp
-template<typename T>
-concept ServiceSelector = requires(T selector, const std::vector<ServiceEndpoint>& endpoints) {
-    { selector.select(endpoints) } -> std::same_as<const ServiceEndpoint*>;
-    { selector.update(endpoints) } -> std::same_as<void>;
-};
+// 可用的选择器类型
+using RoundRobinSelector = details::RoundRobinLoadBalancer<ServiceEndpoint>;
+using RandomSelector = details::RandomLoadBalancer<ServiceEndpoint>;
+using WeightedRoundRobinSelector = details::WeightRoundRobinLoadBalancer<ServiceEndpoint>;
+using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoint>;
 ```
 
 ## 错误码
