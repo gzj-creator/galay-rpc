@@ -164,13 +164,13 @@ public:
         char* body = buffer.data() + RPC_HEADER_SIZE;
         size_t offset = 0;
 
-        uint16_t service_len = htons(static_cast<uint16_t>(m_service_name.size()));
+        uint16_t service_len = rpcHtons(static_cast<uint16_t>(m_service_name.size()));
         std::memcpy(body + offset, &service_len, 2);
         offset += 2;
         std::memcpy(body + offset, m_service_name.data(), m_service_name.size());
         offset += m_service_name.size();
 
-        uint16_t method_len = htons(static_cast<uint16_t>(m_method_name.size()));
+        uint16_t method_len = rpcHtons(static_cast<uint16_t>(m_method_name.size()));
         std::memcpy(body + offset, &method_len, 2);
         offset += 2;
         std::memcpy(body + offset, m_method_name.data(), m_method_name.size());
@@ -185,7 +185,7 @@ public:
 
         uint16_t service_len;
         std::memcpy(&service_len, body + offset, 2);
-        service_len = ntohs(service_len);
+        service_len = rpcNtohs(service_len);
         offset += 2;
 
         if (offset + service_len > length) return false;
@@ -195,7 +195,7 @@ public:
         if (offset + 2 > length) return false;
         uint16_t method_len;
         std::memcpy(&method_len, body + offset, 2);
-        method_len = ntohs(method_len);
+        method_len = rpcNtohs(method_len);
         offset += 2;
 
         if (offset + method_len > length) return false;

@@ -9,11 +9,38 @@
 #define GALAY_RPC_BASE_H
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
+#include <bit>
 
 namespace galay::rpc
 {
+
+/**
+ * @brief 跨平台字节序转换（使用编译器内置，GCC/Clang/AppleClang 均支持）
+ */
+inline uint32_t rpcBswap32(uint32_t v) {
+    if constexpr (std::endian::native == std::endian::big) {
+        return v;
+    } else {
+        return __builtin_bswap32(v);
+    }
+}
+
+inline uint16_t rpcBswap16(uint16_t v) {
+    if constexpr (std::endian::native == std::endian::big) {
+        return v;
+    } else {
+        return __builtin_bswap16(v);
+    }
+}
+
+// 网络字节序 <-> 主机字节序（对称操作）
+inline uint32_t rpcHtonl(uint32_t host) { return rpcBswap32(host); }
+inline uint32_t rpcNtohl(uint32_t net)  { return rpcBswap32(net); }
+inline uint16_t rpcHtons(uint16_t host) { return rpcBswap16(host); }
+inline uint16_t rpcNtohs(uint16_t net)  { return rpcBswap16(net); }
 
 /**
  * @brief RPC消息类型

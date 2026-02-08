@@ -51,9 +51,9 @@ struct RpcHeader {
      * @brief 序列化到缓冲区
      */
     void serialize(char* buffer) const {
-        uint32_t magic = htonl(m_magic);
-        uint32_t request_id = htonl(m_request_id);
-        uint32_t body_length = htonl(m_body_length);
+        uint32_t magic = rpcHtonl(m_magic);
+        uint32_t request_id = rpcHtonl(m_request_id);
+        uint32_t body_length = rpcHtonl(m_body_length);
 
         std::memcpy(buffer, &magic, 4);
         buffer[4] = m_version;
@@ -70,23 +70,23 @@ struct RpcHeader {
     bool deserialize(const char* buffer) {
         uint32_t magic;
         std::memcpy(&magic, buffer, 4);
-        m_magic = ntohl(magic);
+        m_magic = rpcNtohl(magic);
 
         if (m_magic != RPC_MAGIC) {
             return false;
         }
 
-        m_version = buffer[4];
-        m_type = buffer[5];
-        m_flags = buffer[6];
+        m_version  = buffer[4];
+        m_type     = buffer[5];
+        m_flags    = buffer[6];
         m_reserved = buffer[7];
 
         uint32_t request_id, body_length;
         std::memcpy(&request_id, buffer + 8, 4);
         std::memcpy(&body_length, buffer + 12, 4);
 
-        m_request_id = ntohl(request_id);
-        m_body_length = ntohl(body_length);
+        m_request_id  = rpcNtohl(request_id);
+        m_body_length = rpcNtohl(body_length);
 
         return m_body_length <= RPC_MAX_BODY_SIZE;
     }
@@ -138,14 +138,14 @@ public:
         size_t offset = 0;
 
         // service name
-        uint16_t service_len = htons(static_cast<uint16_t>(m_service_name.size()));
+        uint16_t service_len = rpcHtons(static_cast<uint16_t>(m_service_name.size()));
         std::memcpy(body + offset, &service_len, 2);
         offset += 2;
         std::memcpy(body + offset, m_service_name.data(), m_service_name.size());
         offset += m_service_name.size();
 
         // method name
-        uint16_t method_len = htons(static_cast<uint16_t>(m_method_name.size()));
+        uint16_t method_len = rpcHtons(static_cast<uint16_t>(m_method_name.size()));
         std::memcpy(body + offset, &method_len, 2);
         offset += 2;
         std::memcpy(body + offset, m_method_name.data(), m_method_name.size());
@@ -170,7 +170,7 @@ public:
         // service name
         uint16_t service_len;
         std::memcpy(&service_len, body + offset, 2);
-        service_len = ntohs(service_len);
+        service_len = rpcNtohs(service_len);
         offset += 2;
 
         if (offset + service_len > length) return false;
@@ -181,7 +181,7 @@ public:
         if (offset + 2 > length) return false;
         uint16_t method_len;
         std::memcpy(&method_len, body + offset, 2);
-        method_len = ntohs(method_len);
+        method_len = rpcNtohs(method_len);
         offset += 2;
 
         if (offset + method_len > length) return false;
@@ -246,7 +246,7 @@ public:
         char* body = buffer.data() + RPC_HEADER_SIZE;
 
         // error code
-        uint16_t error_code = htons(static_cast<uint16_t>(m_error_code));
+        uint16_t error_code = rpcHtons(static_cast<uint16_t>(m_error_code));
         std::memcpy(body, &error_code, 2);
 
         // payload
@@ -265,7 +265,7 @@ public:
 
         uint16_t error_code;
         std::memcpy(&error_code, body, 2);
-        m_error_code = static_cast<RpcErrorCode>(ntohs(error_code));
+        m_error_code = static_cast<RpcErrorCode>(rpcNtohs(error_code));
 
         if (length > 2) {
             m_payload.assign(body + 2, body + length);
