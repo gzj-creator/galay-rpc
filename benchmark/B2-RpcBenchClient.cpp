@@ -4,6 +4,7 @@
  */
 
 #include "galay-rpc/kernel/RpcClient.h"
+#include "galay-kernel/common/Sleep.hpp"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
@@ -18,13 +19,26 @@
 using namespace galay::rpc;
 using namespace galay::kernel;
 
+namespace {
+constexpr int kDefaultPort = 9000;
+constexpr size_t kDefaultConnections = 100;
+constexpr size_t kDefaultPayloadSize = 256;
+constexpr size_t kDefaultDurationSec = 10;
+constexpr size_t kDefaultIoSchedulers = 0;
+
+constexpr int kMaxConnectRetries = 15;
+constexpr auto kRetryInterval = std::chrono::seconds(1);
+constexpr size_t kClientRingBufferHeadroom = 256;
+constexpr size_t kLatencyReserve = 10000;
+}
+
 struct BenchConfig {
     std::string host = "127.0.0.1";
-    uint16_t port = 9000;
-    size_t connections = 100;
-    size_t payload_size = 256;
-    size_t duration_sec = 10;
-    size_t io_schedulers = 2;
+    uint16_t port = kDefaultPort;
+    size_t connections = kDefaultConnections;
+    size_t payload_size = kDefaultPayloadSize;
+    size_t duration_sec = kDefaultDurationSec;
+    size_t io_schedulers = kDefaultIoSchedulers;
 };
 
 std::atomic<uint64_t> g_total_requests{0};
@@ -40,21 +54,16 @@ void signalHandler(int) {
     g_running.store(false);
 }
 
-Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker_id) {
-    (void)runtime;
-    (void)worker_id;
-
+Coroutine benchWorker(const BenchConfig& config) {
     RpcClientConfig client_config;
     // echo场景下响应体与请求体同量级，按payload放大客户端缓冲，避免大包响应解析失败。
-    client_config.ring_buffer_size = std::max<size_t>(8192, config.payload_size + RPC_HEADER_SIZE + 256);
+    client_config.ring_buffer_size =
+        std::max<size_t>(kDefaultRpcRingBufferSize, config.payload_size + RPC_HEADER_SIZE + kClientRingBufferHeadroom);
 
     RpcClient client(client_config);
 
-    const int max_retries = 15;
-    const auto retry_interval = std::chrono::seconds(1);
-
     bool connected = false;
-    for (int retry_count = 0; retry_count < max_retries && g_running.load(std::memory_order_relaxed); ++retry_count) {
+    for (int retry_count = 0; retry_count < kMaxConnectRetries && g_running.load(std::memory_order_relaxed); ++retry_count) {
         auto connect_result = co_await client.connect(config.host, config.port);
         if (connect_result) {
             connected = true;
@@ -64,8 +73,8 @@ Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker
         g_total_errors.fetch_add(1, std::memory_order_relaxed);
         (void)co_await client.close();
 
-        if (retry_count + 1 < max_retries && g_running.load(std::memory_order_relaxed)) {
-            std::this_thread::sleep_for(retry_interval);
+        if (retry_count + 1 < kMaxConnectRetries && g_running.load(std::memory_order_relaxed)) {
+            co_await sleep(kRetryInterval);
         }
     }
 
@@ -75,7 +84,7 @@ Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker
 
     std::string payload(config.payload_size, 'X');
     std::vector<uint64_t> local_latencies;
-    local_latencies.reserve(10000);
+    local_latencies.reserve(kLatencyReserve);
     bool stop_worker = false;
 
     while (g_running.load(std::memory_order_relaxed) && !stop_worker) {
@@ -89,7 +98,7 @@ Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker
                 (void)co_await client.close();
 
                 bool reconnected = false;
-                for (int retry_count = 0; retry_count < max_retries && g_running.load(std::memory_order_relaxed); ++retry_count) {
+                for (int retry_count = 0; retry_count < kMaxConnectRetries && g_running.load(std::memory_order_relaxed); ++retry_count) {
                     auto reconnect_result = co_await client.connect(config.host, config.port);
                     if (reconnect_result) {
                         reconnected = true;
@@ -99,8 +108,8 @@ Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker
                     g_total_errors.fetch_add(1, std::memory_order_relaxed);
                     (void)co_await client.close();
 
-                    if (retry_count + 1 < max_retries && g_running.load(std::memory_order_relaxed)) {
-                        std::this_thread::sleep_for(retry_interval);
+                    if (retry_count + 1 < kMaxConnectRetries && g_running.load(std::memory_order_relaxed)) {
+                        co_await sleep(kRetryInterval);
                     }
                 }
 
@@ -145,7 +154,7 @@ void printUsage(const char* prog) {
               << "  -c <connections> Number of connections (default: 100)\n"
               << "  -s <size>        Payload size in bytes (default: 256)\n"
               << "  -d <duration>    Test duration in seconds (default: 10)\n"
-              << "  -i <io_count>    IO scheduler count (default: 2)\n";
+              << "  -i <io_count>    IO scheduler count (default: auto, 0)\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -176,7 +185,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Connections: " << config.connections << "\n";
     std::cout << "Payload size: " << config.payload_size << " bytes\n";
     std::cout << "Duration: " << config.duration_sec << " seconds\n";
-    std::cout << "IO Schedulers: " << config.io_schedulers << "\n";
+    std::cout << "IO Schedulers: "
+              << (config.io_schedulers == 0 ? "auto" : std::to_string(config.io_schedulers))
+              << "\n";
     std::cout << "\n";
 
     Runtime runtime(config.io_schedulers, 1);
@@ -186,7 +197,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Starting " << config.connections << " connections...\n";
     for (size_t i = 0; i < config.connections; ++i) {
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(benchWorker(runtime, config, i));
+        scheduler->spawn(benchWorker(config));
     }
 
     std::cout << "Benchmark running...\n\n";
@@ -232,7 +243,8 @@ int main(int argc, char* argv[]) {
 
     double avg_qps = total_requests / duration_sec;
     double avg_throughput = (total_bytes / (1024.0 * 1024.0)) / duration_sec;
-    double error_rate = total_requests > 0 ? (100.0 * total_errors / (total_requests + total_errors)) : 0;
+    const uint64_t total_operations = total_requests + total_errors;
+    double error_rate = total_operations > 0 ? (100.0 * total_errors / total_operations) : 0;
 
     std::cout << "\n=== Benchmark Results ===\n";
     std::cout << "Duration: " << std::fixed << std::setprecision(2) << duration_sec << " seconds\n";

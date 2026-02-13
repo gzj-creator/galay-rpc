@@ -36,6 +36,22 @@ namespace galay::rpc
 {
 
 /**
+ * @brief RPC payload 零拷贝视图（最多两段，适配环形缓冲区）
+ *
+ * @note 本视图仅借用外部内存，不拥有数据。
+ *       调用方必须保证视图覆盖的内存在使用期间保持有效。
+ */
+struct RpcPayloadView {
+    const char* segment1 = nullptr;
+    size_t segment1_len = 0;
+    const char* segment2 = nullptr;
+    size_t segment2_len = 0;
+
+    size_t size() const { return segment1_len + segment2_len; }
+    bool empty() const { return size() == 0; }
+};
+
+/**
  * @brief RPC消息头
  */
 struct RpcHeader {
@@ -113,19 +129,57 @@ public:
     const std::string& methodName() const { return m_method_name; }
     void methodName(std::string_view name) { m_method_name = name; }
 
-    const std::vector<char>& payload() const { return m_payload; }
+    const std::vector<char>& payload() const {
+        materializePayloadIfNeeded();
+        return m_payload;
+    }
+    size_t payloadSize() const {
+        return m_payload_owned ? m_payload.size() : m_payload_view.size();
+    }
+    RpcPayloadView payloadView() const {
+        if (m_payload_owned) {
+            return RpcPayloadView{
+                m_payload.data(),
+                m_payload.size(),
+                nullptr,
+                0
+            };
+        }
+        return m_payload_view;
+    }
     void payload(const char* data, size_t len) {
         m_payload.assign(data, data + len);
+        m_payload_owned = true;
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
     }
     void payload(std::vector<char>&& data) {
         m_payload = std::move(data);
+        m_payload_owned = true;
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
+    }
+    void payloadView(const RpcPayloadView& view) {
+        // 切换为借用模式：不拷贝数据，仅记录外部payload视图。
+        m_payload.clear();
+        m_payload_view = view;
+        m_payload_owned = false;
     }
 
     /**
      * @brief 序列化请求
      */
     std::vector<char> serialize() const {
-        size_t body_size = 2 + m_service_name.size() + 2 + m_method_name.size() + m_payload.size();
+        RpcPayloadView payload_view = payloadView();
+        size_t body_size = 2 + m_service_name.size() + 2 + m_method_name.size() + payload_view.size();
         std::vector<char> buffer(RPC_HEADER_SIZE + body_size);
 
         RpcHeader header;
@@ -152,8 +206,12 @@ public:
         offset += m_method_name.size();
 
         // payload
-        if (!m_payload.empty()) {
-            std::memcpy(body + offset, m_payload.data(), m_payload.size());
+        if (payload_view.segment1_len > 0) {
+            std::memcpy(body + offset, payload_view.segment1, payload_view.segment1_len);
+            offset += payload_view.segment1_len;
+        }
+        if (payload_view.segment2_len > 0) {
+            std::memcpy(body + offset, payload_view.segment2, payload_view.segment2_len);
         }
 
         return buffer;
@@ -191,16 +249,55 @@ public:
         // payload
         if (offset < length) {
             m_payload.assign(body + offset, body + length);
+            m_payload_owned = true;
+            m_payload_view = RpcPayloadView{
+                m_payload.data(),
+                m_payload.size(),
+                nullptr,
+                0
+            };
+        } else {
+            m_payload.clear();
+            m_payload_owned = true;
+            m_payload_view = RpcPayloadView{};
         }
 
         return true;
     }
 
 private:
+    void materializePayloadIfNeeded() const {
+        if (m_payload_owned) {
+            return;
+        }
+
+        const size_t total = m_payload_view.size();
+        m_payload.resize(total);
+        size_t offset = 0;
+        if (m_payload_view.segment1_len > 0) {
+            std::memcpy(m_payload.data(), m_payload_view.segment1, m_payload_view.segment1_len);
+            offset += m_payload_view.segment1_len;
+        }
+        if (m_payload_view.segment2_len > 0) {
+            std::memcpy(m_payload.data() + offset, m_payload_view.segment2, m_payload_view.segment2_len);
+        }
+
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
+        m_payload_owned = true;
+    }
+
+private:
     uint32_t m_request_id = 0;
     std::string m_service_name;
     std::string m_method_name;
-    std::vector<char> m_payload;
+    mutable std::vector<char> m_payload;
+    mutable RpcPayloadView m_payload_view{};
+    mutable bool m_payload_owned = true;
 };
 
 /**
@@ -220,12 +317,49 @@ public:
     RpcErrorCode errorCode() const { return m_error_code; }
     void errorCode(RpcErrorCode code) { m_error_code = code; }
 
-    const std::vector<char>& payload() const { return m_payload; }
+    const std::vector<char>& payload() const {
+        materializePayloadIfNeeded();
+        return m_payload;
+    }
+    size_t payloadSize() const {
+        return m_payload_owned ? m_payload.size() : m_payload_view.size();
+    }
+    RpcPayloadView payloadView() const {
+        if (m_payload_owned) {
+            return RpcPayloadView{
+                m_payload.data(),
+                m_payload.size(),
+                nullptr,
+                0
+            };
+        }
+        return m_payload_view;
+    }
     void payload(const char* data, size_t len) {
         m_payload.assign(data, data + len);
+        m_payload_owned = true;
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
     }
     void payload(std::vector<char>&& data) {
         m_payload = std::move(data);
+        m_payload_owned = true;
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
+    }
+    void payloadView(const RpcPayloadView& view) {
+        // 切换为借用模式：不拷贝数据，仅记录外部payload视图。
+        m_payload.clear();
+        m_payload_view = view;
+        m_payload_owned = false;
     }
 
     bool isOk() const { return m_error_code == RpcErrorCode::OK; }
@@ -234,7 +368,8 @@ public:
      * @brief 序列化响应
      */
     std::vector<char> serialize() const {
-        size_t body_size = 2 + m_payload.size();
+        RpcPayloadView payload_view = payloadView();
+        size_t body_size = 2 + payload_view.size();
         std::vector<char> buffer(RPC_HEADER_SIZE + body_size);
 
         RpcHeader header;
@@ -250,8 +385,13 @@ public:
         std::memcpy(body, &error_code, 2);
 
         // payload
-        if (!m_payload.empty()) {
-            std::memcpy(body + 2, m_payload.data(), m_payload.size());
+        size_t payload_offset = 2;
+        if (payload_view.segment1_len > 0) {
+            std::memcpy(body + payload_offset, payload_view.segment1, payload_view.segment1_len);
+            payload_offset += payload_view.segment1_len;
+        }
+        if (payload_view.segment2_len > 0) {
+            std::memcpy(body + payload_offset, payload_view.segment2, payload_view.segment2_len);
         }
 
         return buffer;
@@ -269,15 +409,54 @@ public:
 
         if (length > 2) {
             m_payload.assign(body + 2, body + length);
+            m_payload_owned = true;
+            m_payload_view = RpcPayloadView{
+                m_payload.data(),
+                m_payload.size(),
+                nullptr,
+                0
+            };
+        } else {
+            m_payload.clear();
+            m_payload_owned = true;
+            m_payload_view = RpcPayloadView{};
         }
 
         return true;
     }
 
 private:
+    void materializePayloadIfNeeded() const {
+        if (m_payload_owned) {
+            return;
+        }
+
+        const size_t total = m_payload_view.size();
+        m_payload.resize(total);
+        size_t offset = 0;
+        if (m_payload_view.segment1_len > 0) {
+            std::memcpy(m_payload.data(), m_payload_view.segment1, m_payload_view.segment1_len);
+            offset += m_payload_view.segment1_len;
+        }
+        if (m_payload_view.segment2_len > 0) {
+            std::memcpy(m_payload.data() + offset, m_payload_view.segment2, m_payload_view.segment2_len);
+        }
+
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
+        m_payload_owned = true;
+    }
+
+private:
     uint32_t m_request_id = 0;
     RpcErrorCode m_error_code = RpcErrorCode::OK;
-    std::vector<char> m_payload;
+    mutable std::vector<char> m_payload;
+    mutable RpcPayloadView m_payload_view{};
+    mutable bool m_payload_owned = true;
 };
 
 } // namespace galay::rpc

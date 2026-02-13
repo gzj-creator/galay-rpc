@@ -8,9 +8,16 @@
 #include <iostream>
 #include <csignal>
 #include <atomic>
+#include <cstdlib>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
+
+namespace {
+constexpr int kDefaultPort = 9000;
+constexpr size_t kDefaultBacklog = 1024;
+constexpr size_t kDefaultBenchRingBufferSize = 128 * 1024;
+}
 
 /**
  * @brief 压测Echo服务
@@ -23,7 +30,7 @@ public:
 
     Coroutine echo(RpcContext& ctx) {
         auto& req = ctx.request();
-        ctx.setPayload(req.payload().data(), req.payload().size());
+        ctx.setPayload(req.payloadView());
         co_return;
     }
 };
@@ -38,9 +45,9 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    uint16_t port = 9000;
+    uint16_t port = kDefaultPort;
     size_t io_count = 0;  // 自动
-    size_t ring_buffer_size = 128 * 1024;
+    size_t ring_buffer_size = kDefaultBenchRingBufferSize;
 
     if (argc > 1) {
         port = static_cast<uint16_t>(std::atoi(argv[1]));
@@ -63,7 +70,7 @@ int main(int argc, char* argv[]) {
     config.host = "0.0.0.0";
     config.port = port;
     config.io_scheduler_count = io_count;
-    config.backlog = 1024;
+    config.backlog = kDefaultBacklog;
     config.ring_buffer_size = ring_buffer_size;
 
     RpcServer server(config);

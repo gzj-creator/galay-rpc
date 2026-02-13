@@ -26,7 +26,7 @@ public:
 
     Coroutine echo(RpcContext& ctx) {
         auto& req = ctx.request();
-        ctx.setPayload(req.payload().data(), req.payload().size());
+        ctx.setPayload(req.payloadView());
         co_return;
     }
 

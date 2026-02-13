@@ -161,6 +161,12 @@ public:
         m_response.payload(std::move(data));
     }
 
+    // 借用模式：仅传递payload视图，不复制数据。
+    // 需确保view引用的数据在响应发送完成前有效。
+    void setPayload(const RpcPayloadView& view) {
+        m_response.payloadView(view);
+    }
+
 private:
     RpcRequest& m_request;
     RpcResponse& m_response;

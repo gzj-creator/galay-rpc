@@ -49,7 +49,7 @@ struct RpcServerConfig {
     int backlog = 128;                  ///< 监听队列长度
     size_t io_scheduler_count = 0;      ///< IO调度器数量，0表示自动
     size_t compute_scheduler_count = 0; ///< 计算调度器数量，0表示自动
-    size_t ring_buffer_size = 8192;     ///< RingBuffer大小
+    size_t ring_buffer_size = kDefaultRpcRingBufferSize;  ///< RingBuffer大小
 };
 
 /**
@@ -151,11 +151,12 @@ private:
      */
     Coroutine handleConnection(GHandle handle) {
         RpcConn conn(handle, RpcReaderSetting{}, RpcWriterSetting{}, m_config.ring_buffer_size);
+        auto reader = conn.getReader();
+        auto writer = conn.getWriter();
 
         while (m_running.load(std::memory_order_acquire)) {
             // 读取请求（循环等待完整消息）
             RpcRequest request;
-            auto reader = conn.getReader();
 
             while (true) {
                 auto result = co_await reader.getRequest(request);
@@ -175,7 +176,6 @@ private:
             co_await processRequest(request, response).wait();
 
             // 发送响应（循环等待发送完成）
-            auto writer = conn.getWriter();
             while (true) {
                 auto result = co_await writer.sendResponse(response);
                 if (!result) {
