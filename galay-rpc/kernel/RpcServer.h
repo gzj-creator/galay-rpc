@@ -150,7 +150,7 @@ private:
      * @brief 处理连接
      */
     Coroutine handleConnection(GHandle handle) {
-        RpcConn conn(handle);
+        RpcConn conn(handle, RpcReaderSetting{}, RpcWriterSetting{}, m_config.ring_buffer_size);
 
         while (m_running.load(std::memory_order_acquire)) {
             // 读取请求（循环等待完整消息）

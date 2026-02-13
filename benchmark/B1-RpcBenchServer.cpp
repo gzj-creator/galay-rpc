@@ -40,6 +40,7 @@ int main(int argc, char* argv[]) {
 
     uint16_t port = 9000;
     size_t io_count = 0;  // 自动
+    size_t ring_buffer_size = 128 * 1024;
 
     if (argc > 1) {
         port = static_cast<uint16_t>(std::atoi(argv[1]));
@@ -47,10 +48,14 @@ int main(int argc, char* argv[]) {
     if (argc > 2) {
         io_count = static_cast<size_t>(std::atoi(argv[2]));
     }
+    if (argc > 3) {
+        ring_buffer_size = static_cast<size_t>(std::strtoull(argv[3], nullptr, 10));
+    }
 
     std::cout << "=== RPC Benchmark Server ===\n";
     std::cout << "Port: " << port << "\n";
     std::cout << "IO Schedulers: " << (io_count == 0 ? "auto" : std::to_string(io_count)) << "\n";
+    std::cout << "RingBuffer size: " << ring_buffer_size << " bytes\n";
 
     auto service = std::make_shared<BenchEchoService>();
 
@@ -59,6 +64,7 @@ int main(int argc, char* argv[]) {
     config.port = port;
     config.io_scheduler_count = io_count;
     config.backlog = 1024;
+    config.ring_buffer_size = ring_buffer_size;
 
     RpcServer server(config);
     server.registerService(service);

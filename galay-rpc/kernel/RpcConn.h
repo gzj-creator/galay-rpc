@@ -709,13 +709,16 @@ template<typename SocketType>
 class RpcConnImpl
 {
 public:
+    static constexpr size_t kDefaultRingBufferSize = 8192;
+
     /**
      * @brief 从已有socket构造（服务端使用）
      */
     explicit RpcConnImpl(GHandle handle, const RpcReaderSetting& reader_setting = {},
-                         const RpcWriterSetting& writer_setting = {})
+                         const RpcWriterSetting& writer_setting = {},
+                         size_t ring_buffer_size = kDefaultRingBufferSize)
         : m_socket(handle)
-        , m_ring_buffer(8192)  // 8KB buffer
+        , m_ring_buffer(normalizeRingBufferSize(ring_buffer_size))
         , m_reader_setting(reader_setting)
         , m_writer_setting(writer_setting)
     {
@@ -727,9 +730,10 @@ public:
      */
     explicit RpcConnImpl(IPType type = IPType::IPV4,
                          const RpcReaderSetting& reader_setting = {},
-                         const RpcWriterSetting& writer_setting = {})
+                         const RpcWriterSetting& writer_setting = {},
+                         size_t ring_buffer_size = kDefaultRingBufferSize)
         : m_socket(type)
-        , m_ring_buffer(8192)
+        , m_ring_buffer(normalizeRingBufferSize(ring_buffer_size))
         , m_reader_setting(reader_setting)
         , m_writer_setting(writer_setting)
     {
@@ -777,6 +781,11 @@ public:
      */
     CloseAwaitable close() {
         return m_socket.close();
+    }
+
+private:
+    static size_t normalizeRingBufferSize(size_t ring_buffer_size) {
+        return ring_buffer_size == 0 ? kDefaultRingBufferSize : ring_buffer_size;
     }
 
 private:

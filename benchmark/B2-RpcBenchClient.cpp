@@ -41,42 +41,75 @@ void signalHandler(int) {
 }
 
 Coroutine benchWorker(Runtime& runtime, const BenchConfig& config, size_t worker_id) {
-    RpcClient client;
+    (void)runtime;
+    (void)worker_id;
 
-    // 连接重试，最多15次，间隔30秒
-    int retry_count = 0;
+    RpcClientConfig client_config;
+    // echo场景下响应体与请求体同量级，按payload放大客户端缓冲，避免大包响应解析失败。
+    client_config.ring_buffer_size = std::max<size_t>(8192, config.payload_size + RPC_HEADER_SIZE + 256);
+
+    RpcClient client(client_config);
+
     const int max_retries = 15;
-    const int retry_interval_sec = 30;
+    const auto retry_interval = std::chrono::seconds(1);
 
-    while (retry_count < max_retries) {
+    bool connected = false;
+    for (int retry_count = 0; retry_count < max_retries && g_running.load(std::memory_order_relaxed); ++retry_count) {
         auto connect_result = co_await client.connect(config.host, config.port);
         if (connect_result) {
+            connected = true;
             break;
         }
-        retry_count++;
-        if (retry_count < max_retries) {
-            std::this_thread::sleep_for(std::chrono::seconds(retry_interval_sec));
+
+        g_total_errors.fetch_add(1, std::memory_order_relaxed);
+        (void)co_await client.close();
+
+        if (retry_count + 1 < max_retries && g_running.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(retry_interval);
         }
     }
 
-    if (retry_count >= max_retries) {
-        g_total_errors.fetch_add(1, std::memory_order_relaxed);
+    if (!connected) {
         co_return;
     }
 
     std::string payload(config.payload_size, 'X');
     std::vector<uint64_t> local_latencies;
     local_latencies.reserve(10000);
+    bool stop_worker = false;
 
-    while (g_running.load(std::memory_order_relaxed)) {
+    while (g_running.load(std::memory_order_relaxed) && !stop_worker) {
         auto start = std::chrono::steady_clock::now();
 
         while (true) {
             auto result = co_await client.call("BenchEchoService", "echo", payload);
             if (!result) {
                 g_total_errors.fetch_add(1, std::memory_order_relaxed);
+
+                (void)co_await client.close();
+
+                bool reconnected = false;
+                for (int retry_count = 0; retry_count < max_retries && g_running.load(std::memory_order_relaxed); ++retry_count) {
+                    auto reconnect_result = co_await client.connect(config.host, config.port);
+                    if (reconnect_result) {
+                        reconnected = true;
+                        break;
+                    }
+
+                    g_total_errors.fetch_add(1, std::memory_order_relaxed);
+                    (void)co_await client.close();
+
+                    if (retry_count + 1 < max_retries && g_running.load(std::memory_order_relaxed)) {
+                        std::this_thread::sleep_for(retry_interval);
+                    }
+                }
+
+                if (!reconnected) {
+                    stop_worker = true;
+                }
                 break;
             }
+
             if (result.value()) {
                 auto& response = result.value().value();
                 if (response.isOk()) {
