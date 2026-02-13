@@ -131,6 +131,48 @@ void testLargePayload(test::TestResultWriter& writer) {
         result->payload().size() == large_payload.size());
 }
 
+void testRpcCallModeFlags(test::TestResultWriter& writer) {
+    const std::string payload = "stream-frame";
+
+    RpcRequest request(700, "StreamService", "upload");
+    request.callMode(RpcCallMode::CLIENT_STREAMING);
+    request.endOfStream(false);
+    request.payload(payload.data(), payload.size());
+
+    auto request_serialized = request.serialize();
+    RpcHeader req_header;
+    const bool req_header_ok = req_header.deserialize(request_serialized.data());
+    auto request_decoded = RpcCodec::decodeRequest(request_serialized.data(), request_serialized.size());
+
+    writer.writeTestCase("RpcRequest call mode flags",
+        req_header_ok &&
+        rpcDecodeCallMode(req_header.m_flags) == RpcCallMode::CLIENT_STREAMING &&
+        !rpcIsEndStream(req_header.m_flags) &&
+        request_decoded.has_value() &&
+        request_decoded->callMode() == RpcCallMode::CLIENT_STREAMING &&
+        !request_decoded->endOfStream() &&
+        std::string(request_decoded->payload().data(), request_decoded->payload().size()) == payload);
+
+    RpcResponse response(700, RpcErrorCode::OK);
+    response.callMode(RpcCallMode::SERVER_STREAMING);
+    response.endOfStream(false);
+    response.payload(payload.data(), payload.size());
+
+    auto response_serialized = response.serialize();
+    RpcHeader resp_header;
+    const bool resp_header_ok = resp_header.deserialize(response_serialized.data());
+    auto response_decoded = RpcCodec::decodeResponse(response_serialized.data(), response_serialized.size());
+
+    writer.writeTestCase("RpcResponse call mode flags",
+        resp_header_ok &&
+        rpcDecodeCallMode(resp_header.m_flags) == RpcCallMode::SERVER_STREAMING &&
+        !rpcIsEndStream(resp_header.m_flags) &&
+        response_decoded.has_value() &&
+        response_decoded->callMode() == RpcCallMode::SERVER_STREAMING &&
+        !response_decoded->endOfStream() &&
+        std::string(response_decoded->payload().data(), response_decoded->payload().size()) == payload);
+}
+
 int main() {
     test::TestResultWriter writer("T1-RpcProtocolTest.result");
 
@@ -145,6 +187,7 @@ int main() {
     testIncompleteData(writer);
     testEmptyPayload(writer);
     testLargePayload(writer);
+    testRpcCallModeFlags(writer);
 
     writer.writeSummary();
 

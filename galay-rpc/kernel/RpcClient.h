@@ -241,6 +241,10 @@ public:
             return std::unexpected(m_recv_awaitable.result().error());
         }
 
+        if (m_response.callMode() != m_request.callMode()) {
+            return std::unexpected(RpcError(RpcErrorCode::INVALID_RESPONSE, "Mismatched response call mode"));
+        }
+
         return std::optional<RpcResponse>(std::move(m_response));
     }
 
@@ -321,8 +325,24 @@ public:
                                           const std::string& method,
                                           const char* payload,
                                           size_t payload_len) {
+        return callWithMode(service, method, RpcCallMode::UNARY, true, payload, payload_len);
+    }
+
+    /**
+     * @brief 按调用模式发送RPC帧（为流式RPC预留）
+     *
+     * @note 当前仍走一次请求对应一次响应链路；后续流式模式会复用该元信息扩展多帧流程。
+     */
+    RpcCallAwaitableImpl<SocketType> callWithMode(const std::string& service,
+                                                  const std::string& method,
+                                                  RpcCallMode mode,
+                                                  bool end_of_stream,
+                                                  const char* payload,
+                                                  size_t payload_len) {
         uint32_t req_id = m_request_id.fetch_add(1, std::memory_order_relaxed);
         RpcRequest request(req_id, service, method);
+        request.callMode(mode);
+        request.endOfStream(end_of_stream);
         if (payload && payload_len > 0) {
             request.payload(payload, payload_len);
         }

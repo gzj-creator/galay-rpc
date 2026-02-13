@@ -173,6 +173,8 @@ private:
 
             // 处理请求
             RpcResponse response(request.requestId());
+            response.callMode(request.callMode());
+            response.endOfStream(true);
             co_await processRequest(request, response).wait();
 
             // 发送响应（循环等待发送完成）
@@ -206,7 +208,7 @@ private:
         auto& service = service_it->second;
 
         // 查找方法
-        auto* handler = service->findMethod(request.methodName());
+        auto* handler = service->findMethod(request.methodName(), request.callMode());
         if (!handler) {
             response.errorCode(RpcErrorCode::METHOD_NOT_FOUND);
             co_return;

@@ -58,6 +58,48 @@ enum class RpcMessageType : uint8_t {
 };
 
 /**
+ * @brief RPC调用模式
+ */
+enum class RpcCallMode : uint8_t {
+    UNARY = 0,            ///< 一元调用（1 req -> 1 resp）
+    CLIENT_STREAMING = 1, ///< 客户端流（N req-frame -> 1 resp）
+    SERVER_STREAMING = 2, ///< 服务端流（1 req -> N resp-frame）
+    BIDI_STREAMING = 3,   ///< 双向流（N req-frame <-> N resp-frame）
+};
+
+/**
+ * @brief 头部 flags 布局
+ *
+ * bit[0..1]: RpcCallMode
+ * bit[2]:    END_STREAM
+ */
+constexpr uint8_t RPC_FLAG_MODE_MASK = 0x03;
+constexpr uint8_t RPC_FLAG_END_STREAM = 0x04;
+
+inline uint8_t rpcEncodeFlags(RpcCallMode mode, bool end_stream) {
+    uint8_t flags = static_cast<uint8_t>(mode) & RPC_FLAG_MODE_MASK;
+    if (end_stream) {
+        flags |= RPC_FLAG_END_STREAM;
+    }
+    return flags;
+}
+
+inline RpcCallMode rpcDecodeCallMode(uint8_t flags) {
+    return static_cast<RpcCallMode>(flags & RPC_FLAG_MODE_MASK);
+}
+
+inline bool rpcIsEndStream(uint8_t flags) {
+    return (flags & RPC_FLAG_END_STREAM) != 0;
+}
+
+inline uint8_t rpcSetEndStreamFlag(uint8_t flags, bool end_stream) {
+    if (end_stream) {
+        return static_cast<uint8_t>(flags | RPC_FLAG_END_STREAM);
+    }
+    return static_cast<uint8_t>(flags & static_cast<uint8_t>(~RPC_FLAG_END_STREAM));
+}
+
+/**
  * @brief RPC错误码
  */
 enum class RpcErrorCode : uint16_t {

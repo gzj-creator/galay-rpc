@@ -77,6 +77,8 @@ public:
 
         RpcRequest request;
         request.requestId(header.m_request_id);
+        request.callMode(rpcDecodeCallMode(header.m_flags));
+        request.endOfStream(rpcIsEndStream(header.m_flags));
 
         if (!request.deserializeBody(data + RPC_HEADER_SIZE, header.m_body_length)) {
             return std::unexpected(RpcError(RpcErrorCode::DESERIALIZATION_ERROR, "Failed to parse request body"));
@@ -113,6 +115,8 @@ public:
 
         RpcResponse response;
         response.requestId(header.m_request_id);
+        response.callMode(rpcDecodeCallMode(header.m_flags));
+        response.endOfStream(rpcIsEndStream(header.m_flags));
 
         if (!response.deserializeBody(data + RPC_HEADER_SIZE, header.m_body_length)) {
             return std::unexpected(RpcError(RpcErrorCode::DESERIALIZATION_ERROR, "Failed to parse response body"));

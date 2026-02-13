@@ -192,6 +192,8 @@ inline std::expected<size_t, RpcError> tryParseRequestMessage(const std::vector<
     }
 
     request.requestId(header.m_request_id);
+    request.callMode(rpcDecodeCallMode(header.m_flags));
+    request.endOfStream(rpcIsEndStream(header.m_flags));
     request.serviceName(service_name);
     request.methodName(method_name);
     // 借用RingBuffer中的payload内存，避免额外拷贝。
@@ -249,6 +251,8 @@ inline std::expected<size_t, RpcError> tryParseResponseMessage(const std::vector
     }
 
     response.requestId(header.m_request_id);
+    response.callMode(rpcDecodeCallMode(header.m_flags));
+    response.endOfStream(rpcIsEndStream(header.m_flags));
     response.errorCode(static_cast<RpcErrorCode>(rpcNtohs(error_code_net)));
     response.payload(std::move(payload));
     return msg_len;
@@ -563,6 +567,7 @@ private:
 
         RpcHeader header;
         header.m_type = static_cast<uint8_t>(RpcMessageType::REQUEST);
+        header.m_flags = rpcEncodeFlags(m_request.callMode(), m_request.endOfStream());
         header.m_request_id = m_request.requestId();
         header.m_body_length = static_cast<uint32_t>(body_size);
         header.serialize(m_header.data());
@@ -684,6 +689,7 @@ private:
 
         RpcHeader header;
         header.m_type = static_cast<uint8_t>(RpcMessageType::RESPONSE);
+        header.m_flags = rpcEncodeFlags(m_response.callMode(), m_response.endOfStream());
         header.m_request_id = m_response.requestId();
         header.m_body_length = static_cast<uint32_t>(body_size);
         header.serialize(m_header.data());

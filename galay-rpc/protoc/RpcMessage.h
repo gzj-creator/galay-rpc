@@ -122,6 +122,10 @@ public:
 
     uint32_t requestId() const { return m_request_id; }
     void requestId(uint32_t id) { m_request_id = id; }
+    RpcCallMode callMode() const { return m_call_mode; }
+    void callMode(RpcCallMode mode) { m_call_mode = mode; }
+    bool endOfStream() const { return m_end_of_stream; }
+    void endOfStream(bool end) { m_end_of_stream = end; }
 
     const std::string& serviceName() const { return m_service_name; }
     void serviceName(std::string_view name) { m_service_name = name; }
@@ -184,6 +188,7 @@ public:
 
         RpcHeader header;
         header.m_type = static_cast<uint8_t>(RpcMessageType::REQUEST);
+        header.m_flags = rpcEncodeFlags(m_call_mode, m_end_of_stream);
         header.m_request_id = m_request_id;
         header.m_body_length = static_cast<uint32_t>(body_size);
         header.serialize(buffer.data());
@@ -293,6 +298,8 @@ private:
 
 private:
     uint32_t m_request_id = 0;
+    RpcCallMode m_call_mode = RpcCallMode::UNARY;
+    bool m_end_of_stream = true;
     std::string m_service_name;
     std::string m_method_name;
     mutable std::vector<char> m_payload;
@@ -313,6 +320,10 @@ public:
 
     uint32_t requestId() const { return m_request_id; }
     void requestId(uint32_t id) { m_request_id = id; }
+    RpcCallMode callMode() const { return m_call_mode; }
+    void callMode(RpcCallMode mode) { m_call_mode = mode; }
+    bool endOfStream() const { return m_end_of_stream; }
+    void endOfStream(bool end) { m_end_of_stream = end; }
 
     RpcErrorCode errorCode() const { return m_error_code; }
     void errorCode(RpcErrorCode code) { m_error_code = code; }
@@ -374,6 +385,7 @@ public:
 
         RpcHeader header;
         header.m_type = static_cast<uint8_t>(RpcMessageType::RESPONSE);
+        header.m_flags = rpcEncodeFlags(m_call_mode, m_end_of_stream);
         header.m_request_id = m_request_id;
         header.m_body_length = static_cast<uint32_t>(body_size);
         header.serialize(buffer.data());
@@ -453,6 +465,8 @@ private:
 
 private:
     uint32_t m_request_id = 0;
+    RpcCallMode m_call_mode = RpcCallMode::UNARY;
+    bool m_end_of_stream = true;
     RpcErrorCode m_error_code = RpcErrorCode::OK;
     mutable std::vector<char> m_payload;
     mutable RpcPayloadView m_payload_view{};
