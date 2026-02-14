@@ -30,8 +30,11 @@
 #include "RpcConn.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/async/TcpSocket.h"
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 #include <atomic>
 
@@ -120,6 +123,132 @@ public:
     }
 
 private:
+    static constexpr size_t kRouteCacheSize = 8;
+    static constexpr size_t kRouteStringReserve = 32;
+    static constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+    static constexpr uint64_t kFnvPrime = 1099511628211ull;
+
+    struct RouteCacheEntry {
+        uint64_t route_hash = 0;
+        std::string service_name;
+        std::string method_name;
+        RpcCallMode call_mode = RpcCallMode::UNARY;
+        RpcMethodHandler* handler = nullptr;
+    };
+
+    static uint64_t hashAppend(uint64_t hash, std::string_view str) {
+        for (unsigned char ch : str) {
+            hash ^= static_cast<uint64_t>(ch);
+            hash *= kFnvPrime;
+        }
+        return hash;
+    }
+
+    static uint64_t buildRouteHash(std::string_view service_name,
+                                   std::string_view method_name,
+                                   RpcCallMode call_mode) {
+        uint64_t hash = kFnvOffset;
+        hash = hashAppend(hash, service_name);
+        hash ^= 0xffu;
+        hash *= kFnvPrime;
+        hash = hashAppend(hash, method_name);
+        hash ^= static_cast<uint64_t>(call_mode);
+        hash *= kFnvPrime;
+        return hash;
+    }
+
+    static bool routeCacheHit(const RouteCacheEntry& entry,
+                              const RpcRequest& request,
+                              uint64_t route_hash) {
+        return entry.handler != nullptr &&
+               entry.route_hash == route_hash &&
+               entry.call_mode == request.callMode() &&
+               entry.service_name == request.serviceName() &&
+               entry.method_name == request.methodName();
+    }
+
+    static bool routeCacheKeyMatch(const RouteCacheEntry& entry,
+                                   const RpcRequest& request,
+                                   uint64_t route_hash) {
+        return entry.route_hash == route_hash &&
+               entry.call_mode == request.callMode() &&
+               entry.service_name == request.serviceName() &&
+               entry.method_name == request.methodName();
+    }
+
+    static void assignCachedString(std::string& cache_value, std::string_view incoming) {
+        if (std::string_view(cache_value) == incoming) {
+            return;
+        }
+
+        if (cache_value.capacity() < incoming.size()) {
+            size_t target_capacity = cache_value.capacity() == 0 ? kRouteStringReserve : cache_value.capacity();
+            while (target_capacity < incoming.size()) {
+                target_capacity <<= 1;
+            }
+            cache_value.reserve(target_capacity);
+        }
+
+        cache_value.assign(incoming.data(), incoming.size());
+    }
+
+    RpcMethodHandler* findCachedHandler(const RpcRequest& request,
+                                        uint64_t route_hash,
+                                        std::array<RouteCacheEntry, kRouteCacheSize>& route_cache,
+                                        RouteCacheEntry*& last_hit) const {
+        if (last_hit != nullptr && routeCacheHit(*last_hit, request, route_hash)) {
+            return last_hit->handler;
+        }
+
+        for (auto& entry : route_cache) {
+            if (routeCacheHit(entry, request, route_hash)) {
+                last_hit = &entry;
+                return entry.handler;
+            }
+        }
+
+        return nullptr;
+    }
+
+    void updateRouteCache(const RpcRequest& request,
+                          uint64_t route_hash,
+                          RpcMethodHandler* handler,
+                          std::array<RouteCacheEntry, kRouteCacheSize>& route_cache,
+                          size_t& route_cache_cursor,
+                          RouteCacheEntry*& last_hit) const {
+        for (auto& entry : route_cache) {
+            if (routeCacheKeyMatch(entry, request, route_hash)) {
+                entry.handler = handler;
+                last_hit = &entry;
+                return;
+            }
+        }
+
+        auto& slot = route_cache[route_cache_cursor];
+        route_cache_cursor = (route_cache_cursor + 1) % kRouteCacheSize;
+        slot.route_hash = route_hash;
+        assignCachedString(slot.service_name, request.serviceName());
+        assignCachedString(slot.method_name, request.methodName());
+        slot.call_mode = request.callMode();
+        slot.handler = handler;
+        last_hit = &slot;
+    }
+
+    std::expected<RpcMethodHandler*, RpcErrorCode> resolveMethodHandler(const RpcRequest& request) {
+        auto service_it = m_services.find(request.serviceName());
+        if (service_it == m_services.end()) {
+            return std::unexpected(RpcErrorCode::SERVICE_NOT_FOUND);
+        }
+
+        auto& service = service_it->second;
+        auto* handler = service->findMethod(request.methodName(), request.callMode());
+        if (handler == nullptr) {
+            return std::unexpected(RpcErrorCode::METHOD_NOT_FOUND);
+        }
+
+        return handler;
+    }
+
     void setLastError(const IOError& error) {
         m_last_error = error;
     }
@@ -182,6 +311,13 @@ private:
         RpcConn conn(handle, RpcReaderSetting{}, RpcWriterSetting{}, m_config.ring_buffer_size);
         auto reader = conn.getReader();
         auto writer = conn.getWriter();
+        std::array<RouteCacheEntry, kRouteCacheSize> route_cache{};
+        for (auto& entry : route_cache) {
+            entry.service_name.reserve(kRouteStringReserve);
+            entry.method_name.reserve(kRouteStringReserve);
+        }
+        size_t route_cache_cursor = 0;
+        RouteCacheEntry* last_hit = nullptr;
 
         while (m_running.load(std::memory_order_acquire)) {
             // 读取请求（循环等待完整消息）
@@ -204,7 +340,33 @@ private:
             RpcResponse response(request.requestId());
             response.callMode(request.callMode());
             response.endOfStream(true);
-            co_await processRequest(request, response).wait();
+
+            const uint64_t route_hash = buildRouteHash(request.serviceName(),
+                                                       request.methodName(),
+                                                       request.callMode());
+            RpcMethodHandler* handler = findCachedHandler(request,
+                                                          route_hash,
+                                                          route_cache,
+                                                          last_hit);
+            if (handler == nullptr) {
+                auto resolve_result = resolveMethodHandler(request);
+                if (!resolve_result.has_value()) {
+                    response.errorCode(resolve_result.error());
+                } else {
+                    handler = resolve_result.value();
+                    updateRouteCache(request,
+                                     route_hash,
+                                     handler,
+                                     route_cache,
+                                     route_cache_cursor,
+                                     last_hit);
+                }
+            }
+
+            if (handler != nullptr) {
+                RpcContext ctx(request, response);
+                co_await (*handler)(ctx).wait();
+            }
 
             // 发送响应（循环等待发送完成）
             while (true) {
@@ -220,32 +382,6 @@ private:
         }
 
         co_await conn.close();
-        co_return;
-    }
-
-    /**
-     * @brief 处理请求
-     */
-    Coroutine processRequest(RpcRequest& request, RpcResponse& response) {
-        // 查找服务
-        auto service_it = m_services.find(request.serviceName());
-        if (service_it == m_services.end()) {
-            response.errorCode(RpcErrorCode::SERVICE_NOT_FOUND);
-            co_return;
-        }
-
-        auto& service = service_it->second;
-
-        // 查找方法
-        auto* handler = service->findMethod(request.methodName(), request.callMode());
-        if (!handler) {
-            response.errorCode(RpcErrorCode::METHOD_NOT_FOUND);
-            co_return;
-        }
-
-        // 调用方法
-        RpcContext ctx(request, response);
-        co_await (*handler)(ctx).wait();
         co_return;
     }
 

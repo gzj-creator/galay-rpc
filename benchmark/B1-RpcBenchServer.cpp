@@ -26,6 +26,9 @@ class BenchEchoService : public RpcService {
 public:
     BenchEchoService() : RpcService("BenchEchoService") {
         registerMethod("echo", &BenchEchoService::echo);
+        registerClientStreamingMethod("echo", &BenchEchoService::echo);
+        registerServerStreamingMethod("echo", &BenchEchoService::echo);
+        registerBidiStreamingMethod("echo", &BenchEchoService::echo);
     }
 
     Coroutine echo(RpcContext& ctx) {

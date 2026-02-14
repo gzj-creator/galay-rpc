@@ -162,6 +162,10 @@ private:
     }
 
     std::expected<bool, RpcError> tryParseFromRingBuffer() {
+        if (m_ring_buffer.readable() == 0) {
+            return false;
+        }
+
         auto read_iovecs = m_ring_buffer.getReadIovecs();
         if (read_iovecs.empty()) {
             return false;

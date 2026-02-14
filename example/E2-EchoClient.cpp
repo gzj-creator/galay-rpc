@@ -1,8 +1,8 @@
 /**
  * @file E2-EchoClient.cpp
- * @brief Echo RPC客户端示例
+ * @brief Echo RPC客户端示例（四种调用模式）
  *
- * @details 演示如何创建一个简单的RPC客户端
+ * @details 演示 unary / client_stream / server_stream / bidi 四种模式的 echo 调用。
  *
  * 使用方法:
  *   ./E2-EchoClient [host] [port]
@@ -15,118 +15,125 @@
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <thread>
+#include <string>
+#include <string_view>
+#include <cstdlib>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
 
+namespace {
+
+const char* callModeToString(RpcCallMode mode) {
+    switch (mode) {
+        case RpcCallMode::UNARY:
+            return "unary";
+        case RpcCallMode::CLIENT_STREAMING:
+            return "client_stream";
+        case RpcCallMode::SERVER_STREAMING:
+            return "server_stream";
+        case RpcCallMode::BIDI_STREAMING:
+            return "bidi";
+        default:
+            return "unknown";
+    }
+}
+
+template<typename CallFn>
+Coroutine callEchoWithMode(std::string_view title,
+                           RpcCallMode expected_mode,
+                           const std::string& payload,
+                           CallFn&& call_fn) {
+    std::cout << "=== " << title << " ===\n";
+    std::cout << "Input: " << payload << "\n";
+
+    auto result = co_await call_fn();
+    if (!result) {
+        std::cerr << "Transport error: " << result.error().message() << "\n\n";
+        co_return;
+    }
+
+    if (!result.value().has_value()) {
+        std::cerr << "No response received\n\n";
+        co_return;
+    }
+
+    auto& response = result.value().value();
+    if (!response.isOk()) {
+        std::cerr << "RPC error: " << rpcErrorCodeToString(response.errorCode()) << "\n\n";
+        co_return;
+    }
+
+    std::string output(response.payload().begin(), response.payload().end());
+    std::cout << "Output: " << output << "\n";
+    std::cout << "Response mode: " << callModeToString(response.callMode())
+              << ", end_of_stream=" << (response.endOfStream() ? "true" : "false") << "\n";
+
+    if (response.callMode() != expected_mode) {
+        std::cerr << "Mode mismatch: expected=" << callModeToString(expected_mode)
+                  << ", actual=" << callModeToString(response.callMode()) << "\n";
+    }
+
+    std::cout << "\n";
+    co_return;
+}
+
+} // namespace
+
 Coroutine runClient(Runtime& runtime, const std::string& host, uint16_t port) {
+    (void)runtime;
     std::cout << "Connecting to " << host << ":" << port << "...\n";
 
     RpcClient client;
 
-    // 连接服务器
     auto connect_result = co_await client.connect(host, port);
-
     if (!connect_result) {
-        std::cerr << "Failed to connect\n";
+        std::cerr << "Failed to connect: " << connect_result.error().message() << "\n";
         co_return;
     }
 
     std::cout << "Connected!\n\n";
 
-    // 测试 echo 方法
-    {
-        std::cout << "=== Test: echo ===\n";
-        std::string payload = "Hello, RPC World!";
-        std::cout << "Input: " << payload << "\n";
+    const std::string payload = "Hello, 4-mode RPC World!";
 
-        while (true) {
-            auto result = co_await client.call("EchoService", "echo", payload);
-            if (!result) {
-                std::cerr << "Error: " << result.error().message() << "\n";
-                break;
-            }
-            if (result.value()) {
-                auto& response = result.value().value();
-                if (response.isOk()) {
-                    std::string output(response.payload().begin(), response.payload().end());
-                    std::cout << "Output: " << output << "\n";
-                } else {
-                    std::cerr << "Error: " << rpcErrorCodeToString(response.errorCode()) << "\n";
-                }
-                break;
-            }
-        }
-        std::cout << "\n";
-    }
+    co_await callEchoWithMode("Unary Echo",
+                              RpcCallMode::UNARY,
+                              payload,
+                              [&]() {
+                                  return client.call("EchoService", "echo", payload);
+                              }).wait();
 
-    // 测试 reverse 方法
-    {
-        std::cout << "=== Test: reverse ===\n";
-        std::string payload = "Hello, RPC!";
-        std::cout << "Input: " << payload << "\n";
+    co_await callEchoWithMode("Client Streaming Echo (single frame)",
+                              RpcCallMode::CLIENT_STREAMING,
+                              payload,
+                              [&]() {
+                                  return client.callClientStreamFrame("EchoService",
+                                                                      "echo",
+                                                                      payload.data(),
+                                                                      payload.size(),
+                                                                      true);
+                              }).wait();
 
-        while (true) {
-            auto result = co_await client.call("EchoService", "reverse", payload);
-            if (!result) {
-                std::cerr << "Error: " << result.error().message() << "\n";
-                break;
-            }
-            if (result.value()) {
-                auto& response = result.value().value();
-                if (response.isOk()) {
-                    std::string output(response.payload().begin(), response.payload().end());
-                    std::cout << "Output: " << output << "\n";
-                }
-                break;
-            }
-        }
-        std::cout << "\n";
-    }
+    co_await callEchoWithMode("Server Streaming Echo (single response frame)",
+                              RpcCallMode::SERVER_STREAMING,
+                              payload,
+                              [&]() {
+                                  return client.callServerStreamRequest("EchoService",
+                                                                        "echo",
+                                                                        payload.data(),
+                                                                        payload.size());
+                              }).wait();
 
-    // 测试 length 方法
-    {
-        std::cout << "=== Test: length ===\n";
-        std::string payload = "Test string for length";
-        std::cout << "Input: \"" << payload << "\" (expected length: " << payload.size() << ")\n";
-
-        while (true) {
-            auto result = co_await client.call("EchoService", "length", payload);
-            if (!result) {
-                std::cerr << "Error: " << result.error().message() << "\n";
-                break;
-            }
-            if (result.value()) {
-                auto& response = result.value().value();
-                if (response.isOk() && response.payload().size() >= 4) {
-                    uint32_t len;
-                    std::memcpy(&len, response.payload().data(), sizeof(len));
-                    std::cout << "Output: " << len << "\n";
-                }
-                break;
-            }
-        }
-        std::cout << "\n";
-    }
-
-    // 测试不存在的服务
-    {
-        std::cout << "=== Test: non-existent service ===\n";
-
-        while (true) {
-            auto result = co_await client.call("NonExistentService", "method");
-            if (!result) {
-                std::cerr << "Error: " << result.error().message() << "\n";
-                break;
-            }
-            if (result.value()) {
-                auto& response = result.value().value();
-                std::cout << "Error code: " << rpcErrorCodeToString(response.errorCode()) << "\n";
-                break;
-            }
-        }
-        std::cout << "\n";
-    }
+    co_await callEchoWithMode("Bidi Streaming Echo (single frame)",
+                              RpcCallMode::BIDI_STREAMING,
+                              payload,
+                              [&]() {
+                                  return client.callBidiStreamFrame("EchoService",
+                                                                    "echo",
+                                                                    payload.data(),
+                                                                    payload.size(),
+                                                                    true);
+                              }).wait();
 
     co_await client.close();
     std::cout << "Client closed.\n";
@@ -144,7 +151,7 @@ int main(int argc, char* argv[]) {
         port = static_cast<uint16_t>(std::atoi(argv[2]));
     }
 
-    std::cout << "=== Echo RPC Client Example ===\n\n";
+    std::cout << "=== Echo RPC Client Example (4 Modes) ===\n\n";
 
     Runtime runtime(1, 1);
     runtime.start();
@@ -152,8 +159,7 @@ int main(int argc, char* argv[]) {
     auto* scheduler = runtime.getNextIOScheduler();
     scheduler->spawn(runClient(runtime, host, port));
 
-    // 等待完成
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::seconds(4));
 
     runtime.stop();
 

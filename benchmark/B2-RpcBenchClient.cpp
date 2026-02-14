@@ -15,6 +15,8 @@
 #include <iomanip>
 #include <algorithm>
 #include <mutex>
+#include <optional>
+#include <string_view>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
@@ -31,6 +33,37 @@ constexpr int kMaxConnectRetries = 15;
 constexpr auto kRetryInterval = std::chrono::seconds(1);
 constexpr size_t kClientRingBufferHeadroom = 256;
 constexpr size_t kLatencyReserve = 10000;
+
+const char* callModeToString(RpcCallMode mode) {
+    switch (mode) {
+        case RpcCallMode::UNARY:
+            return "unary";
+        case RpcCallMode::CLIENT_STREAMING:
+            return "client_stream";
+        case RpcCallMode::SERVER_STREAMING:
+            return "server_stream";
+        case RpcCallMode::BIDI_STREAMING:
+            return "bidi";
+        default:
+            return "unknown";
+    }
+}
+
+std::optional<RpcCallMode> parseCallMode(std::string_view mode) {
+    if (mode == "unary") {
+        return RpcCallMode::UNARY;
+    }
+    if (mode == "client_stream") {
+        return RpcCallMode::CLIENT_STREAMING;
+    }
+    if (mode == "server_stream") {
+        return RpcCallMode::SERVER_STREAMING;
+    }
+    if (mode == "bidi") {
+        return RpcCallMode::BIDI_STREAMING;
+    }
+    return std::nullopt;
+}
 }
 
 struct BenchConfig {
@@ -41,6 +74,7 @@ struct BenchConfig {
     size_t duration_sec = kDefaultDurationSec;
     size_t io_schedulers = kDefaultIoSchedulers;
     size_t pipeline_depth = kDefaultPipelineDepth;
+    RpcCallMode mode = RpcCallMode::UNARY;
 };
 
 std::atomic<uint64_t> g_total_requests{0};
@@ -102,6 +136,8 @@ Coroutine benchWorker(const BenchConfig& config) {
                    inflight_entries.size() < pipeline_depth &&
                    !reconnect_needed) {
                 RpcRequest request(next_request_id++, "BenchEchoService", "echo");
+                request.callMode(config.mode);
+                request.endOfStream(true);
                 request.payloadView(RpcPayloadView{
                     payload.data(),
                     payload.size(),
@@ -193,7 +229,8 @@ void printUsage(const char* prog) {
               << "  -s <size>        Payload size in bytes (default: 256)\n"
               << "  -d <duration>    Test duration in seconds (default: 10)\n"
               << "  -i <io_count>    IO scheduler count (default: auto, 0)\n"
-              << "  -l <pipeline>    Pipeline depth per connection (default: 1)\n";
+              << "  -l <pipeline>    Pipeline depth per connection (default: 1)\n"
+              << "  -m <mode>        RPC mode: unary|client_stream|server_stream|bidi (default: unary)\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -205,10 +242,21 @@ int main(int argc, char* argv[]) {
 
     BenchConfig config;
 
-    for (int i = 1; i < argc; i += 2) {
-        if (i + 1 >= argc) break;
+    for (int i = 1; i < argc; ++i) {
         std::string opt = argv[i];
-        std::string val = argv[i + 1];
+
+        if (opt == "--help") {
+            printUsage(argv[0]);
+            return 0;
+        }
+
+        if (i + 1 >= argc) {
+            std::cerr << "Missing value for option: " << opt << "\n";
+            printUsage(argv[0]);
+            return 1;
+        }
+
+        std::string val = argv[++i];
 
         if (opt == "-h") config.host = val;
         else if (opt == "-p") config.port = static_cast<uint16_t>(std::stoi(val));
@@ -217,9 +265,18 @@ int main(int argc, char* argv[]) {
         else if (opt == "-d") config.duration_sec = std::stoul(val);
         else if (opt == "-i") config.io_schedulers = std::stoul(val);
         else if (opt == "-l") config.pipeline_depth = std::stoul(val);
-        else if (opt == "--help") {
+        else if (opt == "-m") {
+            auto mode = parseCallMode(val);
+            if (!mode.has_value()) {
+                std::cerr << "Invalid mode: " << val << "\n";
+                printUsage(argv[0]);
+                return 1;
+            }
+            config.mode = mode.value();
+        } else {
+            std::cerr << "Unknown option: " << opt << "\n";
             printUsage(argv[0]);
-            return 0;
+            return 1;
         }
     }
 
@@ -232,6 +289,7 @@ int main(int argc, char* argv[]) {
               << (config.io_schedulers == 0 ? "auto" : std::to_string(config.io_schedulers))
               << "\n";
     std::cout << "Pipeline depth: " << std::max<size_t>(1, config.pipeline_depth) << "\n";
+    std::cout << "RPC mode: " << callModeToString(config.mode) << "\n";
     std::cout << "\n";
 
     Runtime runtime(config.io_schedulers, 1);

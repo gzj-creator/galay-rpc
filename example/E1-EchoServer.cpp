@@ -16,6 +16,7 @@
 #include <iostream>
 #include <csignal>
 #include <atomic>
+#include <algorithm>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
@@ -26,8 +27,13 @@ using namespace galay::kernel;
 class EchoService : public RpcService {
 public:
     EchoService() : RpcService("EchoService") {
-        // 注册方法
+        // 同名 echo 方法按调用模式路由
         registerMethod("echo", &EchoService::echo);
+        registerClientStreamingMethod("echo", &EchoService::echo);
+        registerServerStreamingMethod("echo", &EchoService::echo);
+        registerBidiStreamingMethod("echo", &EchoService::echo);
+
+        // 其他一元方法
         registerMethod("reverse", &EchoService::reverse);
         registerMethod("length", &EchoService::length);
     }
@@ -95,7 +101,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Server listening on port " << port << "\n";
     std::cout << "Available methods:\n";
-    std::cout << "  - EchoService.echo(data) -> data\n";
+    std::cout << "  - EchoService.echo(data) [unary/client_stream/server_stream/bidi] -> data\n";
     std::cout << "  - EchoService.reverse(data) -> reversed data\n";
     std::cout << "  - EchoService.length(data) -> length (uint32)\n";
     std::cout << "\nPress Ctrl+C to stop.\n";

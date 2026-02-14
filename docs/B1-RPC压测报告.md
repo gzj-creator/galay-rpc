@@ -9,13 +9,13 @@
 | 操作系统 | macOS 15.7.3 (Darwin 24.6.0) |
 | 编译器 | AppleClang, C++23 |
 | 构建类型 | Release |
-| 测试日期 | 2026-02-08（基线） / 2026-02-13（优化复测） / 2026-02-14（1-6 优化复测） |
+| 测试日期 | 2026-02-08（基线） / 2026-02-13（优化复测） / 2026-02-14（1-6 优化复测 + 四模式复测） |
 
 ## 测试方法
 
 - 服务端：`B1-RpcBenchServer`，Echo 服务，原样返回 payload
 - 客户端：`B2-RpcBenchClient`，多连接并发调用，统计 QPS、吞吐量、延迟分布
-- 每组测试持续 10 秒
+- 每组测试持续 5~10 秒（按命令参数 `-d`）
 
 ## 测试结果
 
@@ -147,6 +147,33 @@
 - 大包场景保持在 8.3 万到 8.8 万 QPS 区间，吞吐约 10.3 到 10.9 GB/s。
 - 小包 pipeline 场景稳定在 32 万 QPS 级别。
 
+### 7. 四种 RPC 模式 Echo 压测（2026-02-14）
+
+> 服务端已为同一 `echo` 方法注册 `unary/client_stream/server_stream/bidi` 四种模式，客户端通过 `-m` 选择模式。
+
+#### 7.1 小包（47B，200连接，`-i 0`，`-l 4`，5秒）
+
+| 模式 | 平均 QPS | 吞吐量 | P99 延迟 |
+|------|----------|--------|----------|
+| unary | 345,965 | 31.01 MB/s | 40,811 us |
+| client_stream | 277,020 | 24.83 MB/s | 53,104 us |
+| server_stream | 293,926 | 26.35 MB/s | 50,927 us |
+| bidi | 283,218 | 25.39 MB/s | 71,229 us |
+
+#### 7.2 大包（64KB，100连接，`-i 0`，`-l 1`，5秒）
+
+| 模式 | 平均 QPS | 吞吐量 | P99 延迟 |
+|------|----------|--------|----------|
+| unary | 87,055 | 10,881.85 MB/s | 15,522 us |
+| client_stream | 85,434 | 10,679.27 MB/s | 14,911 us |
+| server_stream | 83,592 | 10,449.03 MB/s | 15,271 us |
+| bidi | 84,188 | 10,523.46 MB/s | 14,649 us |
+
+**分析：**
+- 四种模式均可正常跑通并返回成功响应（非 0 QPS）。
+- 当前实现为“单请求帧 -> 单响应帧”链路，模式间性能差距主要来自调度/解析路径细节，整体处于同一量级。
+- 64KB 场景下四模式吞吐均在 10.4~10.9 GB/s 区间。
+
 ## 每秒 QPS 趋势（100连接, 256B, 2 IO调度器）
 
 ```
@@ -204,4 +231,16 @@ QPS 在 166K-193K 之间波动，整体稳定。
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 5 -s 65536 -i 0 -l 1
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 5 -s 65536 -i 0 -l 4
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4
+
+# 四种模式（47B）
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m unary
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m client_stream
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m server_stream
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m bidi
+
+# 四种模式（64KB）
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 5 -s 65536 -i 0 -l 1 -m unary
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 5 -s 65536 -i 0 -l 1 -m client_stream
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 5 -s 65536 -i 0 -l 1 -m server_stream
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 5 -s 65536 -i 0 -l 1 -m bidi
 ```

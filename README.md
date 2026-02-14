@@ -16,6 +16,26 @@
 | 100 | 1KB | 2 | **178,606** | 349 MB/s | 464 us | 1,933 us | 0% |
 | 100 | 4KB | 4 | **155,697** | 1,216 MB/s | 392 us | 4,010 us | 0% |
 
+### RPC 四模式 Echo（2026-02-14）
+
+47B（200连接，`-i 0`，`-l 4`，5秒）：
+
+| 模式 | QPS | 吞吐量 | P99 |
+|------|-----|--------|-----|
+| unary | **345,965** | 31.01 MB/s | 40,811 us |
+| client_stream | **277,020** | 24.83 MB/s | 53,104 us |
+| server_stream | **293,926** | 26.35 MB/s | 50,927 us |
+| bidi | **283,218** | 25.39 MB/s | 71,229 us |
+
+64KB（100连接，`-i 0`，`-l 1`，5秒）：
+
+| 模式 | QPS | 吞吐量 | P99 |
+|------|-----|--------|-----|
+| unary | **87,055** | 10,881.85 MB/s | 15,522 us |
+| client_stream | **85,434** | 10,679.27 MB/s | 14,911 us |
+| server_stream | **83,592** | 10,449.03 MB/s | 15,271 us |
+| bidi | **84,188** | 10,523.46 MB/s | 14,649 us |
+
 ### ServiceDiscovery 压测
 
 | 指标 | 数值 |
@@ -41,6 +61,7 @@
 ### RPC 客户端
 - **简洁API**: 协程风格的 RPC 调用
 - **连接复用**: 支持长连接复用
+- **四种调用模式**: 支持 unary / client_stream / server_stream / bidi
 - **超时控制**: 支持请求级别的超时设置
 
 ### 服务发现（可扩展）
@@ -149,14 +170,20 @@ Coroutine callEcho(Runtime& runtime) {
         co_return;
     }
 
-    // 调用远程方法
-    RpcResponse response;
-    std::expected<void, RpcError> result;
-    co_await client.call("EchoService", "echo", "Hello", response, result).wait();
+    // 一元调用
+    auto unary_result = co_await client.call("EchoService", "echo", "Hello");
+    if (unary_result && unary_result.value() && unary_result.value()->isOk()) {
+        std::string data(unary_result.value()->payload().begin(),
+                         unary_result.value()->payload().end());
+        std::cout << "Unary response: " << data << "\n";
+    }
 
-    if (result.has_value() && response.isOk()) {
-        std::string data(response.payload().begin(), response.payload().end());
-        std::cout << "Response: " << data << "\n";
+    // 双向流模式（当前示例为单帧）
+    auto bidi_result = co_await client.callBidiStreamFrame("EchoService", "echo", "Hello", 5, true);
+    if (bidi_result && bidi_result.value() && bidi_result.value()->isOk()) {
+        std::string data(bidi_result.value()->payload().begin(),
+                         bidi_result.value()->payload().end());
+        std::cout << "Bidi response: " << data << "\n";
     }
 
     co_await client.close();
@@ -310,9 +337,16 @@ class RpcServer {
 ```cpp
 class RpcClient {
     ConnectAwaitable connect(const std::string& host, uint16_t port);
-    Coroutine call(const std::string& service, const std::string& method,
-                   const char* payload, size_t len,
-                   RpcResponse& response, std::expected<void, RpcError>& result);
+    RpcCallAwaitable call(const std::string& service, const std::string& method);
+    RpcCallAwaitable call(const std::string& service, const std::string& method, const std::string& payload);
+    RpcCallAwaitable call(const std::string& service, const std::string& method,
+                          const char* payload, size_t payload_len);
+    RpcCallAwaitable callClientStreamFrame(const std::string& service, const std::string& method,
+                                           const char* payload, size_t payload_len, bool end_of_stream);
+    RpcCallAwaitable callServerStreamRequest(const std::string& service, const std::string& method,
+                                             const char* payload, size_t payload_len);
+    RpcCallAwaitable callBidiStreamFrame(const std::string& service, const std::string& method,
+                                         const char* payload, size_t payload_len, bool end_of_stream);
     CloseAwaitable close();
 };
 ```
@@ -322,7 +356,10 @@ class RpcClient {
 ```cpp
 class RpcService {
     explicit RpcService(std::string_view name);
-    void registerMethod(std::string_view name, RpcMethodHandler handler);
+    void registerMethod(std::string_view name, RpcMethodHandler handler);  // unary
+    void registerClientStreamingMethod(std::string_view name, RpcMethodHandler handler);
+    void registerServerStreamingMethod(std::string_view name, RpcMethodHandler handler);
+    void registerBidiStreamingMethod(std::string_view name, RpcMethodHandler handler);
     template<typename T>
     void registerMethod(std::string_view name, Coroutine (T::*method)(RpcContext&));
 };
@@ -377,7 +414,7 @@ using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoi
 
 # 启动客户端压测
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 10 -s 256 -i 4
-# 新增: -l 指定单连接 pipeline 深度（默认 1）
+# 新增: -l 指定单连接 pipeline 深度（默认 1），-m 指定 RPC 模式
 
 # 参数说明:
 #   -h: 服务器地址
@@ -387,6 +424,13 @@ using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoi
 #   -s: payload大小（字节）
 #   -i: IO调度器数量
 #   -l: 单连接 pipeline 深度
+#   -m: RPC 模式（unary|client_stream|server_stream|bidi）
+
+# 四模式 Echo（47B）示例
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m unary
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m client_stream
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m server_stream
+./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m bidi
 ```
 
 ## 许可证
