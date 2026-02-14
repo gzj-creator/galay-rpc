@@ -373,9 +373,11 @@ using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoi
 ```bash
 # 启动服务端
 ./benchmark/B1-RpcBenchServer 9000
+# 参数: [port] [io_scheduler_count] [ring_buffer_size]
 
 # 启动客户端压测
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 100 -d 10 -s 256 -i 4
+# 新增: -l 指定单连接 pipeline 深度（默认 1）
 
 # 参数说明:
 #   -h: 服务器地址
@@ -384,6 +386,7 @@ using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoi
 #   -d: 测试持续时间（秒）
 #   -s: payload大小（字节）
 #   -i: IO调度器数量
+#   -l: 单连接 pipeline 深度
 ```
 
 ## 许可证

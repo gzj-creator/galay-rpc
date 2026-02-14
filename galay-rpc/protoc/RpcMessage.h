@@ -29,7 +29,6 @@
 #include "RpcBase.h"
 #include <cstring>
 #include <vector>
-#include <memory>
 #include <expected>
 
 namespace galay::rpc
@@ -129,9 +128,11 @@ public:
 
     const std::string& serviceName() const { return m_service_name; }
     void serviceName(std::string_view name) { m_service_name = name; }
+    void serviceName(std::string&& name) { m_service_name = std::move(name); }
 
     const std::string& methodName() const { return m_method_name; }
     void methodName(std::string_view name) { m_method_name = name; }
+    void methodName(std::string&& name) { m_method_name = std::move(name); }
 
     const std::vector<char>& payload() const {
         materializePayloadIfNeeded();

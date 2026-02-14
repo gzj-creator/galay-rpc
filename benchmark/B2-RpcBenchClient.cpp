@@ -3,7 +3,7 @@
  * @brief RPC压测客户端（含P99延迟统计）
  */
 
-#include "galay-rpc/kernel/RpcClient.h"
+#include "galay-rpc/kernel/RpcConn.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
@@ -25,6 +25,7 @@ constexpr size_t kDefaultConnections = 100;
 constexpr size_t kDefaultPayloadSize = 256;
 constexpr size_t kDefaultDurationSec = 10;
 constexpr size_t kDefaultIoSchedulers = 0;
+constexpr size_t kDefaultPipelineDepth = 1;
 
 constexpr int kMaxConnectRetries = 15;
 constexpr auto kRetryInterval = std::chrono::seconds(1);
@@ -39,10 +40,10 @@ struct BenchConfig {
     size_t payload_size = kDefaultPayloadSize;
     size_t duration_sec = kDefaultDurationSec;
     size_t io_schedulers = kDefaultIoSchedulers;
+    size_t pipeline_depth = kDefaultPipelineDepth;
 };
 
 std::atomic<uint64_t> g_total_requests{0};
-std::atomic<uint64_t> g_total_errors{0};
 std::atomic<uint64_t> g_total_bytes{0};
 std::atomic<bool> g_running{true};
 
@@ -55,84 +56,123 @@ void signalHandler(int) {
 }
 
 Coroutine benchWorker(const BenchConfig& config) {
-    RpcClientConfig client_config;
-    // echo场景下响应体与请求体同量级，按payload放大客户端缓冲，避免大包响应解析失败。
-    client_config.ring_buffer_size =
+    const size_t ring_buffer_size =
         std::max<size_t>(kDefaultRpcRingBufferSize, config.payload_size + RPC_HEADER_SIZE + kClientRingBufferHeadroom);
-
-    RpcClient client(client_config);
-
-    bool connected = false;
-    for (int retry_count = 0; retry_count < kMaxConnectRetries && g_running.load(std::memory_order_relaxed); ++retry_count) {
-        auto connect_result = co_await client.connect(config.host, config.port);
-        if (connect_result) {
-            connected = true;
-            break;
-        }
-
-        g_total_errors.fetch_add(1, std::memory_order_relaxed);
-        (void)co_await client.close();
-
-        if (retry_count + 1 < kMaxConnectRetries && g_running.load(std::memory_order_relaxed)) {
-            co_await sleep(kRetryInterval);
-        }
-    }
-
-    if (!connected) {
-        co_return;
-    }
-
+    const size_t pipeline_depth = std::max<size_t>(1, config.pipeline_depth);
     std::string payload(config.payload_size, 'X');
     std::vector<uint64_t> local_latencies;
     local_latencies.reserve(kLatencyReserve);
-    bool stop_worker = false;
 
-    while (g_running.load(std::memory_order_relaxed) && !stop_worker) {
-        auto start = std::chrono::steady_clock::now();
+    while (g_running.load(std::memory_order_relaxed)) {
+        RpcConn conn(IPType::IPV4, RpcReaderSetting{}, RpcWriterSetting{}, ring_buffer_size);
 
-        while (true) {
-            auto result = co_await client.call("BenchEchoService", "echo", payload);
-            if (!result) {
-                g_total_errors.fetch_add(1, std::memory_order_relaxed);
+        bool connected = false;
+        for (int retry_count = 0; retry_count < kMaxConnectRetries && g_running.load(std::memory_order_relaxed); ++retry_count) {
+            Host server_host(IPType::IPV4, config.host, config.port);
+            auto connect_result = co_await conn.connect(server_host);
+            if (connect_result.has_value()) {
+                connected = true;
+                break;
+            }
 
-                (void)co_await client.close();
+            (void)co_await conn.close();
 
-                bool reconnected = false;
-                for (int retry_count = 0; retry_count < kMaxConnectRetries && g_running.load(std::memory_order_relaxed); ++retry_count) {
-                    auto reconnect_result = co_await client.connect(config.host, config.port);
-                    if (reconnect_result) {
-                        reconnected = true;
+            if (retry_count + 1 < kMaxConnectRetries && g_running.load(std::memory_order_relaxed)) {
+                co_await sleep(kRetryInterval);
+            }
+        }
+
+        if (!connected) {
+            break;
+        }
+
+        auto reader = conn.getReader();
+        auto writer = conn.getWriter();
+        struct InflightEntry {
+            uint32_t request_id;
+            std::chrono::steady_clock::time_point send_time;
+        };
+        std::vector<InflightEntry> inflight_entries;
+        inflight_entries.reserve(pipeline_depth);
+        uint32_t next_request_id = 0;
+        bool reconnect_needed = false;
+
+        while (g_running.load(std::memory_order_relaxed) && !reconnect_needed) {
+            while (g_running.load(std::memory_order_relaxed) &&
+                   inflight_entries.size() < pipeline_depth &&
+                   !reconnect_needed) {
+                RpcRequest request(next_request_id++, "BenchEchoService", "echo");
+                request.payloadView(RpcPayloadView{
+                    payload.data(),
+                    payload.size(),
+                    nullptr,
+                    0
+                });
+                const auto send_start = std::chrono::steady_clock::now();
+
+                while (true) {
+                    auto send_result = co_await writer.sendRequest(request);
+                    if (!send_result.has_value()) {
+                        reconnect_needed = true;
                         break;
                     }
-
-                    g_total_errors.fetch_add(1, std::memory_order_relaxed);
-                    (void)co_await client.close();
-
-                    if (retry_count + 1 < kMaxConnectRetries && g_running.load(std::memory_order_relaxed)) {
-                        co_await sleep(kRetryInterval);
+                    if (send_result.value()) {
+                        inflight_entries.push_back(InflightEntry{
+                            request.requestId(),
+                            send_start
+                        });
+                        break;
                     }
                 }
+            }
 
-                if (!reconnected) {
-                    stop_worker = true;
+            if (reconnect_needed || inflight_entries.empty()) {
+                continue;
+            }
+
+            RpcResponse response;
+            while (true) {
+                auto recv_result = co_await reader.getResponse(response);
+                if (!recv_result.has_value()) {
+                    reconnect_needed = true;
+                    break;
                 }
+                if (recv_result.value()) {
+                    break;
+                }
+            }
+
+            if (reconnect_needed) {
                 break;
             }
 
-            if (result.value()) {
-                auto& response = result.value().value();
-                if (response.isOk()) {
-                    auto end = std::chrono::steady_clock::now();
-                    auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-                    local_latencies.push_back(latency_us);
-
-                    g_total_requests.fetch_add(1, std::memory_order_relaxed);
-                    g_total_bytes.fetch_add(payload.size() * 2, std::memory_order_relaxed);
-                } else {
-                    g_total_errors.fetch_add(1, std::memory_order_relaxed);
-                }
+            auto entry_it = std::find_if(
+                inflight_entries.begin(),
+                inflight_entries.end(),
+                [&](const InflightEntry& entry) { return entry.request_id == response.requestId(); });
+            if (entry_it == inflight_entries.end()) {
+                reconnect_needed = true;
                 break;
             }
+
+            const auto end = std::chrono::steady_clock::now();
+            const auto latency_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(end - entry_it->send_time).count();
+            local_latencies.push_back(static_cast<uint64_t>(latency_us));
+
+            *entry_it = std::move(inflight_entries.back());
+            inflight_entries.pop_back();
+
+            if (response.isOk()) {
+                g_total_requests.fetch_add(1, std::memory_order_relaxed);
+                g_total_bytes.fetch_add(payload.size() * 2, std::memory_order_relaxed);
+            }
+        }
+
+        (void)co_await conn.close();
+
+        if (g_running.load(std::memory_order_relaxed) && reconnect_needed) {
+            co_await sleep(kRetryInterval);
         }
     }
 
@@ -141,8 +181,6 @@ Coroutine benchWorker(const BenchConfig& config) {
         std::lock_guard<std::mutex> lock(g_latency_mutex);
         g_latencies.insert(g_latencies.end(), local_latencies.begin(), local_latencies.end());
     }
-
-    co_await client.close();
     co_return;
 }
 
@@ -154,12 +192,16 @@ void printUsage(const char* prog) {
               << "  -c <connections> Number of connections (default: 100)\n"
               << "  -s <size>        Payload size in bytes (default: 256)\n"
               << "  -d <duration>    Test duration in seconds (default: 10)\n"
-              << "  -i <io_count>    IO scheduler count (default: auto, 0)\n";
+              << "  -i <io_count>    IO scheduler count (default: auto, 0)\n"
+              << "  -l <pipeline>    Pipeline depth per connection (default: 1)\n";
 }
 
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
+#if defined(SIGPIPE)
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     BenchConfig config;
 
@@ -174,6 +216,7 @@ int main(int argc, char* argv[]) {
         else if (opt == "-s") config.payload_size = std::stoul(val);
         else if (opt == "-d") config.duration_sec = std::stoul(val);
         else if (opt == "-i") config.io_schedulers = std::stoul(val);
+        else if (opt == "-l") config.pipeline_depth = std::stoul(val);
         else if (opt == "--help") {
             printUsage(argv[0]);
             return 0;
@@ -188,6 +231,7 @@ int main(int argc, char* argv[]) {
     std::cout << "IO Schedulers: "
               << (config.io_schedulers == 0 ? "auto" : std::to_string(config.io_schedulers))
               << "\n";
+    std::cout << "Pipeline depth: " << std::max<size_t>(1, config.pipeline_depth) << "\n";
     std::cout << "\n";
 
     Runtime runtime(config.io_schedulers, 1);
@@ -211,7 +255,6 @@ int main(int argc, char* argv[]) {
 
         uint64_t current_requests = g_total_requests.load();
         uint64_t current_bytes = g_total_bytes.load();
-        uint64_t current_errors = g_total_errors.load();
 
         uint64_t qps = current_requests - last_requests;
         double throughput_mb = static_cast<double>(current_bytes - last_bytes) / (1024.0 * 1024.0);
@@ -219,7 +262,6 @@ int main(int argc, char* argv[]) {
         std::cout << "[" << std::setw(3) << (sec + 1) << "s] "
                   << "QPS: " << std::setw(8) << qps
                   << " | Throughput: " << std::fixed << std::setprecision(2) << throughput_mb << " MB/s"
-                  << " | Errors: " << current_errors
                   << "\n";
 
         last_requests = current_requests;
@@ -238,21 +280,16 @@ int main(int argc, char* argv[]) {
     double duration_sec = duration.count() / 1000.0;
 
     uint64_t total_requests = g_total_requests.load();
-    uint64_t total_errors = g_total_errors.load();
     uint64_t total_bytes = g_total_bytes.load();
 
     double avg_qps = total_requests / duration_sec;
     double avg_throughput = (total_bytes / (1024.0 * 1024.0)) / duration_sec;
-    const uint64_t total_operations = total_requests + total_errors;
-    double error_rate = total_operations > 0 ? (100.0 * total_errors / total_operations) : 0;
 
     std::cout << "\n=== Benchmark Results ===\n";
     std::cout << "Duration: " << std::fixed << std::setprecision(2) << duration_sec << " seconds\n";
     std::cout << "Total Requests: " << total_requests << "\n";
-    std::cout << "Total Errors: " << total_errors << "\n";
     std::cout << "Average QPS: " << std::fixed << std::setprecision(0) << avg_qps << "\n";
     std::cout << "Average Throughput: " << std::fixed << std::setprecision(2) << avg_throughput << " MB/s\n";
-    std::cout << "Error Rate: " << std::fixed << std::setprecision(2) << error_rate << "%\n";
 
     // 计算延迟百分位数
     if (!g_latencies.empty()) {

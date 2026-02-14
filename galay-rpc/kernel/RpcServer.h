@@ -31,6 +31,7 @@
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <atomic>
 
@@ -110,23 +111,51 @@ public:
      */
     Runtime& runtime() { return m_runtime; }
 
+    /**
+     * @brief 获取最近一次服务器错误（若有）
+     * @note 非线程安全：仅用于单线程启动阶段查询错误。
+     */
+    std::optional<IOError> lastError() const {
+        return m_last_error;
+    }
+
 private:
+    void setLastError(const IOError& error) {
+        m_last_error = error;
+    }
+
+    void clearLastError() {
+        m_last_error.reset();
+    }
+
     /**
      * @brief 接受连接循环
      */
     Coroutine acceptLoop() {
+        clearLastError();
+
         TcpSocket listener(IPType::IPV4);
-        listener.option().handleReuseAddr();
-        listener.option().handleNonBlock();
+        auto reuse_addr_result = listener.option().handleReuseAddr();
+        if (!reuse_addr_result) {
+            setLastError(reuse_addr_result.error());
+            co_return;
+        }
+        auto non_block_result = listener.option().handleNonBlock();
+        if (!non_block_result) {
+            setLastError(non_block_result.error());
+            co_return;
+        }
 
         Host host(IPType::IPV4, m_config.host, m_config.port);
         auto bind_result = listener.bind(host);
         if (!bind_result) {
+            setLastError(bind_result.error());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
+            setLastError(listen_result.error());
             co_return;
         }
 
@@ -225,6 +254,7 @@ private:
     Runtime m_runtime;
     std::unordered_map<std::string, std::shared_ptr<RpcService>> m_services;
     std::atomic<bool> m_running{false};
+    std::optional<IOError> m_last_error;
 };
 
 } // namespace galay::rpc

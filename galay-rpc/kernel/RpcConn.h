@@ -11,12 +11,9 @@
 #define GALAY_RPC_CONN_H
 
 #include "galay-rpc/protoc/RpcMessage.h"
-#include "galay-rpc/protoc/RpcCodec.h"
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/common/Buffer.h"
 #include <algorithm>
@@ -194,8 +191,9 @@ inline std::expected<size_t, RpcError> tryParseRequestMessage(const std::vector<
     request.requestId(header.m_request_id);
     request.callMode(rpcDecodeCallMode(header.m_flags));
     request.endOfStream(rpcIsEndStream(header.m_flags));
-    request.serviceName(service_name);
-    request.methodName(method_name);
+    // 直接move进request，避免再做一次字符串拷贝。
+    request.serviceName(std::move(service_name));
+    request.methodName(std::move(method_name));
     // 借用RingBuffer中的payload内存，避免额外拷贝。
     // 该视图在后续读取覆盖对应缓冲区前有效。
     request.payloadView(payload_view);
@@ -245,31 +243,44 @@ inline std::expected<size_t, RpcError> tryParseResponseMessage(const std::vector
     cursor += sizeof(error_code_net);
 
     const size_t payload_len = msg_len - cursor;
-    std::vector<char> payload(payload_len);
-    if (payload_len > 0 && !copyFromIovecs(iovecs, cursor, payload.data(), payload_len)) {
-        return std::unexpected(RpcError(RpcErrorCode::DESERIALIZATION_ERROR, "Invalid response payload"));
+    RpcPayloadView payload_view;
+    if (!payloadViewFromIovecs(iovecs, cursor, payload_len, payload_view)) {
+        return std::unexpected(RpcError(RpcErrorCode::DESERIALIZATION_ERROR, "Invalid response payload view"));
     }
 
     response.requestId(header.m_request_id);
     response.callMode(rpcDecodeCallMode(header.m_flags));
     response.endOfStream(rpcIsEndStream(header.m_flags));
     response.errorCode(static_cast<RpcErrorCode>(rpcNtohs(error_code_net)));
-    response.payload(std::move(payload));
+    // 借用RingBuffer中的响应payload内存，按需再materialize。
+    response.payloadView(payload_view);
     return msg_len;
 }
 
 inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed) {
-    while (consumed > 0 && !iovecs.empty()) {
-        if (consumed >= iovecs.front().iov_len) {
-            consumed -= iovecs.front().iov_len;
-            iovecs.erase(iovecs.begin());
-            continue;
-        }
+    if (consumed == 0 || iovecs.empty()) {
+        return;
+    }
 
-        auto* base = static_cast<char*>(iovecs.front().iov_base);
-        iovecs.front().iov_base = base + consumed;
-        iovecs.front().iov_len -= consumed;
-        consumed = 0;
+    size_t idx = 0;
+    while (idx < iovecs.size() && consumed >= iovecs[idx].iov_len) {
+        consumed -= iovecs[idx].iov_len;
+        ++idx;
+    }
+
+    if (idx >= iovecs.size()) {
+        iovecs.clear();
+        return;
+    }
+
+    if (consumed > 0) {
+        auto* base = static_cast<char*>(iovecs[idx].iov_base);
+        iovecs[idx].iov_base = base + consumed;
+        iovecs[idx].iov_len -= consumed;
+    }
+
+    if (idx > 0) {
+        iovecs.erase(iovecs.begin(), iovecs.begin() + static_cast<std::ptrdiff_t>(idx));
     }
 }
 

@@ -33,7 +33,6 @@
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include <atomic>
 #include <expected>
@@ -364,6 +363,38 @@ public:
     RpcCallAwaitableImpl<SocketType> call(const std::string& service,
                                           const std::string& method) {
         return call(service, method, nullptr, 0);
+    }
+
+    /**
+     * @brief 客户端流帧发送（N frame -> 1 response）
+     */
+    RpcCallAwaitableImpl<SocketType> callClientStreamFrame(const std::string& service,
+                                                           const std::string& method,
+                                                           const char* payload,
+                                                           size_t payload_len,
+                                                           bool end_of_stream) {
+        return callWithMode(service, method, RpcCallMode::CLIENT_STREAMING, end_of_stream, payload, payload_len);
+    }
+
+    /**
+     * @brief 服务端流请求（1 request -> N response frame）
+     */
+    RpcCallAwaitableImpl<SocketType> callServerStreamRequest(const std::string& service,
+                                                             const std::string& method,
+                                                             const char* payload,
+                                                             size_t payload_len) {
+        return callWithMode(service, method, RpcCallMode::SERVER_STREAMING, true, payload, payload_len);
+    }
+
+    /**
+     * @brief 双向流帧发送（N frame <-> N frame）
+     */
+    RpcCallAwaitableImpl<SocketType> callBidiStreamFrame(const std::string& service,
+                                                         const std::string& method,
+                                                         const char* payload,
+                                                         size_t payload_len,
+                                                         bool end_of_stream) {
+        return callWithMode(service, method, RpcCallMode::BIDI_STREAMING, end_of_stream, payload, payload_len);
     }
 
     /**
