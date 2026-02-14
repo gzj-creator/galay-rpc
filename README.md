@@ -36,6 +36,26 @@
 | server_stream | **83,592** | 10,449.03 MB/s | 15,271 us |
 | bidi | **84,188** | 10,523.46 MB/s | 14,649 us |
 
+### 真实 Stream Echo 压测（STREAM 协议，2026-02-14）
+
+压测工具：`B4-RpcStreamBenchServer` + `B5-RpcStreamBenchClient`  
+协议路径：`STREAM_INIT -> STREAM_INIT_ACK -> STREAM_DATA -> STREAM_END`  
+配置：100 连接，128B payload，16 frames/stream，5 秒，`-i 1`，共 5 轮
+
+| 轮次 | Streams/s | Frames/s | 吞吐量 | P99 延迟 | 样本数 |
+|------|-----------|----------|--------|----------|--------|
+| 1 | 493 | 7,892 | 1.93 MB/s | 534,512 us | 2,477 |
+| 2 | 379 | 6,063 | 1.48 MB/s | 597,784 us | 1,902 |
+| 3 | 199 | 3,185 | 0.78 MB/s | 687,526 us | 1,000 |
+| 4 | 358 | 5,736 | 1.40 MB/s | 444,069 us | 1,800 |
+| 5 | 155 | 2,477 | 0.60 MB/s | 1,217,434 us | 778 |
+
+均值和标准差（样本标准差）：
+- Streams/s: `316.80 ± 138.45`
+- Frames/s: `5070.60 ± 2217.55`
+- Throughput: `1.238 ± 0.543 MB/s`
+- P99: `696265 ± 304614 us`
+
 ### ServiceDiscovery 压测
 
 | 指标 | 数值 |
@@ -44,7 +64,7 @@
 | 错误率 | **0%** |
 | 测试配置 | 100 workers, 2个IO调度器 |
 
-详细压测报告见 [docs/B1-RPC压测报告.md](docs/B1-RPC压测报告.md) 和 [docs/B3-服务发现压测报告.md](docs/B3-服务发现压测报告.md)。
+详细压测报告见 [docs/B1-RPC压测报告.md](docs/B1-RPC压测报告.md)、[docs/B3-服务发现压测报告.md](docs/B3-服务发现压测报告.md) 和 [docs/B4-真实流压测报告.md](docs/B4-真实流压测报告.md)。
 
 ## 核心特性
 
@@ -431,6 +451,17 @@ using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoi
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m client_stream
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m server_stream
 ./benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m bidi
+
+# 真实流示例（STREAM_*）
+./example/E3-StreamServer 9100 1 131072
+./example/E4-StreamClient 127.0.0.1 9100 200 64
+
+# 真实流压测（STREAM_*）
+./benchmark/B4-RpcStreamBenchServer 9100 1 131072
+./benchmark/B5-RpcStreamBenchClient -h 127.0.0.1 -p 9100 -c 100 -d 5 -s 128 -f 16 -i 1
+#   -w: 帧级 pipeline 窗口（默认 1，等价一发一收）
+# 窗口化示例（更接近高吞吐流）
+./benchmark/B5-RpcStreamBenchClient -h 127.0.0.1 -p 9100 -c 100 -d 5 -s 128 -f 16 -w 8 -i 0
 ```
 
 ## 许可证

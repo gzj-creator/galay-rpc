@@ -288,6 +288,12 @@ public:
 
     template<typename Handle>
     auto await_suspend(Handle handle) {
+        auto parse_result = parseFromRingBuffer();
+        if (!parse_result.has_value() || parse_result.value()) {
+            m_cached_result.emplace(std::move(parse_result));
+            return false;
+        }
+
         if (!m_readv_awaitable) {
             m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
         }
@@ -295,6 +301,16 @@ public:
     }
 
     std::expected<bool, RpcError> await_resume() {
+        if (m_cached_result.has_value()) {
+            auto result = std::move(m_cached_result.value());
+            m_cached_result.reset();
+            return result;
+        }
+
+        if (!m_readv_awaitable) {
+            return parseFromRingBuffer();
+        }
+
         auto result = m_readv_awaitable->await_resume();
         m_readv_awaitable.reset();
 
@@ -311,8 +327,13 @@ public:
         }
 
         m_ring_buffer.produce(bytes_read);
+        return parseFromRingBuffer();
+    }
 
-        // 获取可读数据
+private:
+    enum class State { ReadHeader, ReadBody };
+
+    std::expected<bool, RpcError> parseFromRingBuffer() {
         auto read_iovecs = m_ring_buffer.getReadIovecs();
         size_t total_readable = 0;
         for (const auto& iov : read_iovecs) {
@@ -321,10 +342,9 @@ public:
 
         if (m_state == State::ReadHeader) {
             if (total_readable < RPC_HEADER_SIZE) {
-                return false;  // 继续读取
+                return false;
             }
 
-            // 线性化头部
             char header_buf[RPC_HEADER_SIZE];
             size_t copied = 0;
             for (const auto& iov : read_iovecs) {
@@ -347,19 +367,19 @@ public:
 
             if (msg_type == RpcMessageType::STREAM_END || msg_type == RpcMessageType::STREAM_CANCEL) {
                 m_message.setEnd(true);
-                return true;  // 流结束
+                m_state = State::ReadHeader;
+                return true;
             }
 
             if (m_body_length == 0) {
-                return true;  // 无消息体
+                m_state = State::ReadHeader;
+                return true;
             }
 
             m_state = State::ReadBody;
-            total_readable -= RPC_HEADER_SIZE;
         }
 
         if (m_state == State::ReadBody) {
-            // 重新获取可读数据
             read_iovecs = m_ring_buffer.getReadIovecs();
             total_readable = 0;
             for (const auto& iov : read_iovecs) {
@@ -367,10 +387,9 @@ public:
             }
 
             if (total_readable < m_body_length) {
-                return false;  // 继续读取
+                return false;
             }
 
-            // 读取消息体
             std::vector<char> body(m_body_length);
             size_t copied = 0;
             for (const auto& iov : read_iovecs) {
@@ -382,16 +401,12 @@ public:
 
             m_message.deserializeBody(body.data(), body.size());
             m_ring_buffer.consume(m_body_length);
-
-            m_state = State::ReadHeader;  // 重置状态
-            return true;  // 接收完成
+            m_state = State::ReadHeader;
+            return true;
         }
 
         return false;
     }
-
-private:
-    enum class State { ReadHeader, ReadBody };
 
     RingBuffer& m_ring_buffer;
     SocketType& m_socket;
@@ -400,6 +415,7 @@ private:
     RpcHeader m_header;
     size_t m_body_length;
     std::optional<ReadvAwaitableType> m_readv_awaitable;
+    std::optional<std::expected<bool, RpcError>> m_cached_result;
 
 public:
     std::expected<bool, IOError> m_result;  // TimeoutSupport 需要
