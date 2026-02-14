@@ -744,7 +744,7 @@ Coroutine biStreamExample(RpcStreamConn& stream) {
 
 ### ServiceDiscovery.h
 
-服务发现模块，使用 C++20 Concept 约束。
+服务发现模块，使用 C++23 Concept 约束。
 
 #### ServiceEndpoint
 

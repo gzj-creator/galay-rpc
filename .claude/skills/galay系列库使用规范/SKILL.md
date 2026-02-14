@@ -1,3 +1,8 @@
+---
+name: galay-libs-guide
+description: Galay 系列库总览与使用指南（galay-kernel/http/ssl/redis/mcp）。
+---
+
 # Galay 系列库使用指南
 
 本文档汇总了 galay 系列各个库的功能和使用方法，方便快速查阅。

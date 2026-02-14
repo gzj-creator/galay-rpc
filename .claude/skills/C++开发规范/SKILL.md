@@ -1,3 +1,8 @@
+---
+name: cpp-dev-workflow
+description: C++ 代码实现、测试/压测、文档与提交的完整流程规范。
+---
+
 # SKILLS文档: C++代码编写与测试完整流程
 
 ## Skill: C++代码编写与测试
