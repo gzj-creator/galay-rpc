@@ -1,3 +1,7 @@
+module;
+
+#include "galay-rpc/module/ModulePrelude.hpp"
+
 export module galay.rpc;
 
 export {

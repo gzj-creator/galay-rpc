@@ -3,6 +3,7 @@ project(galay-rpc VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 选项
@@ -10,6 +11,7 @@ option(BUILD_TESTS "Build test programs" ON)
 option(BUILD_BENCHMARKS "Build benchmark programs" ON)
 option(BUILD_EXAMPLES "Build example programs" ON)
 option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) examples" ON)
+option(GALAY_RPC_INSTALL_MODULE_INTERFACE "Install C++ module interface files (*.cppm)" ON)
 
 # 查找依赖
 find_package(spdlog REQUIRED)
@@ -52,9 +54,33 @@ if(BUILD_MODULE_EXAMPLES AND NOT GALAY_RPC_MODULES_GENERATOR_SUPPORTED)
     set(BUILD_MODULE_EXAMPLES OFF)
 endif()
 
+set(GALAY_RPC_MODULE_COMPILE_OPTIONS "")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    list(APPEND GALAY_RPC_MODULE_COMPILE_OPTIONS -Xclang -fskip-odr-check-in-gmf)
+    if(APPLE)
+        if(CMAKE_OSX_SYSROOT)
+            list(APPEND GALAY_RPC_MODULE_COMPILE_OPTIONS -isysroot "${CMAKE_OSX_SYSROOT}")
+        else()
+            execute_process(
+                COMMAND xcrun --show-sdk-path
+                OUTPUT_VARIABLE GALAY_RPC_MACOS_SDK_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            if(GALAY_RPC_MACOS_SDK_PATH)
+                list(APPEND GALAY_RPC_MODULE_COMPILE_OPTIONS -isysroot "${GALAY_RPC_MACOS_SDK_PATH}")
+            endif()
+        endif()
+    endif()
+endif()
+
 if(BUILD_MODULE_EXAMPLES AND GALAY_RPC_MODULES_SUPPORTED AND GALAY_RPC_MODULES_GENERATOR_SUPPORTED)
     add_library(galay-rpc-modules STATIC)
     target_link_libraries(galay-rpc-modules PUBLIC galay-rpc)
+    target_compile_features(galay-rpc-modules PUBLIC cxx_std_23)
+    if(GALAY_RPC_MODULE_COMPILE_OPTIONS)
+        target_compile_options(galay-rpc-modules PRIVATE ${GALAY_RPC_MODULE_COMPILE_OPTIONS})
+    endif()
     target_sources(galay-rpc-modules
         PUBLIC
             FILE_SET CXX_MODULES
@@ -87,10 +113,27 @@ install(TARGETS galay-rpc
     RUNTIME DESTINATION bin
 )
 
-install(DIRECTORY galay-rpc/
-    DESTINATION include/galay-rpc
-    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.cppm"
-)
+if(TARGET galay-rpc-modules AND GALAY_RPC_INSTALL_MODULE_INTERFACE)
+    install(TARGETS galay-rpc-modules
+        EXPORT galay-rpc-targets
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+        FILE_SET CXX_MODULES DESTINATION include/galay-rpc/module
+    )
+endif()
+
+if(TARGET galay-rpc-modules AND GALAY_RPC_INSTALL_MODULE_INTERFACE)
+    install(DIRECTORY galay-rpc/
+        DESTINATION include/galay-rpc
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+    )
+else()
+    install(DIRECTORY galay-rpc/
+        DESTINATION include/galay-rpc
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "*.cppm"
+    )
+endif()
 
 install(EXPORT galay-rpc-targets
     FILE galay-rpc-targets.cmake

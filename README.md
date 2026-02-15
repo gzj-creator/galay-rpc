@@ -87,6 +87,28 @@ import galay.rpc;
 ./build/example/E4-StreamClientImport 127.0.0.1 9100 200 64
 ```
 
+### 模块支持更新（2026-02）
+
+本次模块接口已统一为：
+
+- `module;`
+- `#include "galay-rpc/module/ModulePrelude.hpp"`
+- `export module galay.rpc;`
+- `export { #include ... }`
+
+对应文件：
+
+- `galay-rpc/module/galay.rpc.cppm`
+- `galay-rpc/module/ModulePrelude.hpp`
+
+推荐构建（Clang 20 + Ninja）：
+
+```bash
+cmake -S . -B build-mod -G Ninja \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++
+cmake --build build-mod --target galay-rpc-modules -j
+```
+
 ## 运行测试与基准
 
 ### 测试
