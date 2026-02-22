@@ -1,6 +1,6 @@
 # Galay-RPC
 
-高性能 **C++23** 协程 RPC 框架，构建于 [galay-kernel](https://github.com/galay) 异步运行时之上。
+高性能 **C++23** 协程 RPC 框架，构建于 [galay-kernel](https://github.com/gzj-creator/galay-kernel) 异步运行时之上。
 
 ## 特性
 
@@ -26,7 +26,34 @@
 - CMake 3.16+
 - C++23 编译器（GCC 11+ / Clang 14+ / AppleClang 15+）
 - `spdlog`
-- `galay-kernel`
+- Galay 内部依赖（统一联调推荐）：
+  - `galay-kernel`（构建必需）
+  - `galay-utils`（推荐）
+  - `galay-http`（推荐）
+
+## 依赖安装（macOS / Homebrew）
+
+```bash
+brew install cmake spdlog
+```
+
+## 依赖安装（Ubuntu / Debian）
+
+```bash
+sudo apt-get update
+sudo apt-get install -y cmake g++ libspdlog-dev
+```
+
+## 拉取源码（统一联调推荐）
+
+```bash
+git clone https://github.com/gzj-creator/galay-kernel.git
+git clone https://github.com/gzj-creator/galay-utils.git
+git clone https://github.com/gzj-creator/galay-http.git
+git clone https://github.com/gzj-creator/galay-rpc.git
+```
+
+仅单独构建 `galay-rpc` 时，最小内部依赖为 `galay-kernel`。
 
 ## 构建
 
@@ -34,7 +61,7 @@
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
+cmake --build . --parallel
 ```
 
 ## 常用 CMake 选项
@@ -106,7 +133,7 @@ import galay.rpc;
 ```bash
 cmake -S . -B build-mod -G Ninja \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++
-cmake --build build-mod --target galay-rpc-modules -j
+cmake --build build-mod --target galay-rpc-modules --parallel
 ```
 
 ## 运行测试与基准

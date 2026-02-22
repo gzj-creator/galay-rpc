@@ -534,7 +534,7 @@ public:
     ConnectAwaitable connect(const std::string& host, uint16_t port);
 
     // 调用远程方法
-    // 返回 RpcCallAwaitable&，支持 .setTimeout(ms)
+    // 返回 RpcCallAwaitable&，支持 .timeout(std::chrono::milliseconds(ms))
     RpcCallAwaitable& call(const std::string& service, const std::string& method,
                            const char* payload, size_t payload_len);
     RpcCallAwaitable& call(const std::string& service, const std::string& method,
@@ -590,7 +590,8 @@ Coroutine example(RpcClient& client) {
 
     // 带超时调用（毫秒）
     while (true) {
-        auto result = co_await client.call("EchoService", "echo", "Hello").setTimeout(5000);
+        auto result = co_await client.call("EchoService", "echo", "Hello")
+            .timeout(std::chrono::milliseconds(5000));
         if (!result) {
             if (result.error().code() == RpcErrorCode::REQUEST_TIMEOUT) {
                 // 超时处理
