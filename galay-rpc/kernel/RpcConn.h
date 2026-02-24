@@ -10,17 +10,16 @@
 #ifndef GALAY_RPC_CONN_H
 #define GALAY_RPC_CONN_H
 
+#include "RpcAwaitableBase.h"
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/common/Buffer.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <expected>
-#include <optional>
 
 namespace galay::rpc
 {
@@ -257,43 +256,6 @@ inline std::expected<size_t, RpcError> tryParseResponseMessage(const std::vector
     return msg_len;
 }
 
-inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed) {
-    if (consumed == 0 || iovecs.empty()) {
-        return;
-    }
-
-    size_t idx = 0;
-    while (idx < iovecs.size() && consumed >= iovecs[idx].iov_len) {
-        consumed -= iovecs[idx].iov_len;
-        ++idx;
-    }
-
-    if (idx >= iovecs.size()) {
-        iovecs.clear();
-        return;
-    }
-
-    if (consumed > 0) {
-        auto* base = static_cast<char*>(iovecs[idx].iov_base);
-        iovecs[idx].iov_base = base + consumed;
-        iovecs[idx].iov_len -= consumed;
-    }
-
-    if (idx > 0) {
-        iovecs.erase(iovecs.begin(), iovecs.begin() + static_cast<std::ptrdiff_t>(idx));
-    }
-}
-
-inline RpcError ioErrorToRpcError(const IOError& io_error, RpcErrorCode default_code) {
-    if (io_error.code() == kTimeout) {
-        return RpcError(RpcErrorCode::REQUEST_TIMEOUT, io_error.message());
-    }
-    if (IOError::contains(io_error.code(), kDisconnectError)) {
-        return RpcError(RpcErrorCode::CONNECTION_CLOSED, io_error.message());
-    }
-    return RpcError(default_code, io_error.message());
-}
-
 }  // namespace detail
 
 /**
@@ -314,74 +276,28 @@ struct RpcWriterSetting {
  * @brief RPC请求读取等待体（使用readv）
  */
 template<typename SocketType>
-class GetRpcRequestAwaitable : public TimeoutSupport<GetRpcRequestAwaitable<SocketType>>
+class GetRpcRequestAwaitable
+    : public RingBufferReadAwaitable<GetRpcRequestAwaitable<SocketType>, SocketType>
 {
+    using Base = RingBufferReadAwaitable<GetRpcRequestAwaitable<SocketType>, SocketType>;
+    friend Base;
 public:
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
-
     GetRpcRequestAwaitable(RingBuffer& ring_buffer,
                            const RpcReaderSetting& setting,
                            RpcRequest& request,
                            SocketType& socket)
-        : m_ring_buffer(ring_buffer)
+        : Base(ring_buffer, socket)
         , m_setting(setting)
         , m_request(request)
-        , m_socket(socket)
-    {
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        auto parse_result = tryParseFromRingBuffer();
-        if (!parse_result.has_value() || parse_result.value()) {
-            m_cached_result = std::move(parse_result);
-            return false;
-        }
-
-        if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
-        }
-        return m_readv_awaitable->await_suspend(handle);
-    }
-
-    std::expected<bool, RpcError> await_resume() {
-        if (m_cached_result.has_value()) {
-            auto result = std::move(*m_cached_result);
-            m_cached_result.reset();
-            return result;
-        }
-
-        auto readv_result = m_readv_awaitable->await_resume();
-        m_readv_awaitable.reset();
-
-        if (!readv_result) {
-            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
-                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed by peer"));
-            }
-            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
-        }
-
-        ssize_t bytes_read = readv_result.value();
-
-        if (bytes_read == 0) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-        }
-
-        m_ring_buffer.produce(bytes_read);
-        return tryParseFromRingBuffer();
-    }
+    {}
 
 private:
-    std::expected<bool, RpcError> tryParseFromRingBuffer() {
-        if (m_ring_buffer.readable() == 0) {
+    std::expected<bool, RpcError> parseFromRingBuffer() {
+        if (this->ringBuffer().readable() == 0) {
             return false;
         }
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = this->ringBuffer().getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
@@ -399,91 +315,41 @@ private:
             return false;
         }
 
-        m_ring_buffer.consume(parse_result.value());
+        this->ringBuffer().consume(parse_result.value());
         return true;
     }
 
 private:
-    RingBuffer& m_ring_buffer;
     const RpcReaderSetting& m_setting;
     RpcRequest& m_request;
-    SocketType& m_socket;
-    std::optional<ReadvAwaitableType> m_readv_awaitable;
-    std::optional<std::expected<bool, RpcError>> m_cached_result;
 };
 
 /**
  * @brief RPC响应读取等待体（使用readv）
  */
 template<typename SocketType>
-class GetRpcResponseAwaitable : public TimeoutSupport<GetRpcResponseAwaitable<SocketType>>
+class GetRpcResponseAwaitable
+    : public RingBufferReadAwaitable<GetRpcResponseAwaitable<SocketType>, SocketType>
 {
+    using Base = RingBufferReadAwaitable<GetRpcResponseAwaitable<SocketType>, SocketType>;
+    friend Base;
 public:
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
-
     GetRpcResponseAwaitable(RingBuffer& ring_buffer,
                             const RpcReaderSetting& setting,
                             RpcResponse& response,
                             SocketType& socket)
-        : m_ring_buffer(ring_buffer)
+        : Base(ring_buffer, socket)
         , m_setting(setting)
         , m_response(response)
-        , m_socket(socket)
-    {
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        auto parse_result = tryParseFromRingBuffer();
-        if (!parse_result.has_value() || parse_result.value()) {
-            m_cached_result = std::move(parse_result);
-            return false;
-        }
-
-        if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
-        }
-        return m_readv_awaitable->await_suspend(handle);
-    }
-
-    std::expected<bool, RpcError> await_resume() {
-        if (m_cached_result.has_value()) {
-            auto result = std::move(*m_cached_result);
-            m_cached_result.reset();
-            return result;
-        }
-
-        auto readv_result = m_readv_awaitable->await_resume();
-        m_readv_awaitable.reset();
-
-        if (!readv_result) {
-            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
-                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed by peer"));
-            }
-            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
-        }
-
-        ssize_t bytes_read = readv_result.value();
-
-        if (bytes_read == 0) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-        }
-
-        m_ring_buffer.produce(bytes_read);
-        return tryParseFromRingBuffer();
-    }
+    {}
 
 private:
-    std::expected<bool, RpcError> tryParseFromRingBuffer() {
-        if (m_ring_buffer.readable() == 0) {
+    std::expected<bool, RpcError> parseFromRingBuffer() {
+        if (this->ringBuffer().readable() == 0) {
             return false;
         }
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = this->ringBuffer().getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
@@ -501,82 +367,32 @@ private:
             return false;
         }
 
-        m_ring_buffer.consume(parse_result.value());
+        this->ringBuffer().consume(parse_result.value());
         return true;
     }
 
 private:
-    RingBuffer& m_ring_buffer;
     const RpcReaderSetting& m_setting;
     RpcResponse& m_response;
-    SocketType& m_socket;
-    std::optional<ReadvAwaitableType> m_readv_awaitable;
-    std::optional<std::expected<bool, RpcError>> m_cached_result;
 };
 
 /**
  * @brief RPC发送请求等待体（使用writev）
  */
 template<typename SocketType>
-class SendRpcRequestAwaitable : public WritevAwaitable
+class SendRpcRequestAwaitable
+    : public ResumableWriteAwaitable<SendRpcRequestAwaitable<SocketType>, SocketType>
 {
+    using Base = ResumableWriteAwaitable<SendRpcRequestAwaitable<SocketType>, SocketType>;
 public:
     SendRpcRequestAwaitable(const RpcRequest& request, SocketType& socket)
-        : WritevAwaitable(socket.controller(), {})
+        : Base(socket)
         , m_request(request)
     {
         rebuildIovecs();
     }
 
-    std::expected<bool, RpcError> await_resume() {
-        auto writev_result = WritevAwaitable::await_resume();
-        if (!writev_result.has_value()) {
-            return std::unexpected(detail::ioErrorToRpcError(writev_result.error(), RpcErrorCode::INTERNAL_ERROR));
-        }
-        return true;
-    }
-
 private:
-#ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-        if (cqe == nullptr) {
-            return m_iovecs.empty();
-        }
-        if (!WritevIOContext::handleComplete(cqe, handle)) {
-            return false;
-        }
-        return handleWriteResult();
-    }
-#else
-    bool handleComplete(GHandle handle) override {
-        if (!WritevIOContext::handleComplete(handle)) {
-            return false;
-        }
-        return handleWriteResult();
-    }
-#endif
-
-    bool handleWriteResult() {
-        if (!m_result.has_value()) {
-            return true;
-        }
-
-        const size_t sent_once = m_result.value();
-        if (sent_once == 0) {
-            m_result = std::unexpected(IOError(kSendFailed, 0));
-            return true;
-        }
-
-        m_total_sent += sent_once;
-        if (m_total_sent >= m_total_bytes) {
-            m_result = m_total_sent;
-            return true;
-        }
-
-        detail::consumeWritevIovecs(m_iovecs, sent_once);
-        return false;
-    }
-
     void rebuildIovecs() {
         RpcPayloadView payload_view = m_request.payloadView();
         const size_t body_size =
@@ -593,37 +409,37 @@ private:
 
         m_service_len = rpcHtons(static_cast<uint16_t>(m_request.serviceName().size()));
         m_method_len = rpcHtons(static_cast<uint16_t>(m_request.methodName().size()));
-        m_total_bytes = RPC_HEADER_SIZE + body_size;
+        this->m_total_bytes = RPC_HEADER_SIZE + body_size;
 
-        m_iovecs.clear();
-        m_iovecs.reserve(6);
-        m_iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
-        m_iovecs.push_back(iovec{&m_service_len, sizeof(m_service_len)});
+        this->m_iovecs.clear();
+        this->m_iovecs.reserve(6);
+        this->m_iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+        this->m_iovecs.push_back(iovec{&m_service_len, sizeof(m_service_len)});
 
         if (!m_request.serviceName().empty()) {
-            m_iovecs.push_back(iovec{
+            this->m_iovecs.push_back(iovec{
                 const_cast<char*>(m_request.serviceName().data()),
                 m_request.serviceName().size()
             });
         }
 
-        m_iovecs.push_back(iovec{&m_method_len, sizeof(m_method_len)});
+        this->m_iovecs.push_back(iovec{&m_method_len, sizeof(m_method_len)});
         if (!m_request.methodName().empty()) {
-            m_iovecs.push_back(iovec{
+            this->m_iovecs.push_back(iovec{
                 const_cast<char*>(m_request.methodName().data()),
                 m_request.methodName().size()
             });
         }
 
         if (payload_view.segment1_len > 0) {
-            m_iovecs.push_back(iovec{
+            this->m_iovecs.push_back(iovec{
                 const_cast<char*>(payload_view.segment1),
                 payload_view.segment1_len
             });
         }
 
         if (payload_view.segment2_len > 0) {
-            m_iovecs.push_back(iovec{
+            this->m_iovecs.push_back(iovec{
                 const_cast<char*>(payload_view.segment2),
                 payload_view.segment2_len
             });
@@ -635,73 +451,25 @@ private:
     std::array<char, RPC_HEADER_SIZE> m_header{};
     uint16_t m_service_len = 0;
     uint16_t m_method_len = 0;
-    size_t m_total_bytes = 0;
-    size_t m_total_sent = 0;
 };
 
 /**
  * @brief RPC发送响应等待体（使用writev）
  */
 template<typename SocketType>
-class SendRpcResponseAwaitable : public WritevAwaitable
+class SendRpcResponseAwaitable
+    : public ResumableWriteAwaitable<SendRpcResponseAwaitable<SocketType>, SocketType>
 {
+    using Base = ResumableWriteAwaitable<SendRpcResponseAwaitable<SocketType>, SocketType>;
 public:
     SendRpcResponseAwaitable(const RpcResponse& response, SocketType& socket)
-        : WritevAwaitable(socket.controller(), {})
+        : Base(socket)
         , m_response(response)
     {
         rebuildIovecs();
     }
 
-    std::expected<bool, RpcError> await_resume() {
-        auto writev_result = WritevAwaitable::await_resume();
-        if (!writev_result.has_value()) {
-            return std::unexpected(detail::ioErrorToRpcError(writev_result.error(), RpcErrorCode::INTERNAL_ERROR));
-        }
-        return true;
-    }
-
 private:
-#ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-        if (cqe == nullptr) {
-            return m_iovecs.empty();
-        }
-        if (!WritevIOContext::handleComplete(cqe, handle)) {
-            return false;
-        }
-        return handleWriteResult();
-    }
-#else
-    bool handleComplete(GHandle handle) override {
-        if (!WritevIOContext::handleComplete(handle)) {
-            return false;
-        }
-        return handleWriteResult();
-    }
-#endif
-
-    bool handleWriteResult() {
-        if (!m_result.has_value()) {
-            return true;
-        }
-
-        const size_t sent_once = m_result.value();
-        if (sent_once == 0) {
-            m_result = std::unexpected(IOError(kSendFailed, 0));
-            return true;
-        }
-
-        m_total_sent += sent_once;
-        if (m_total_sent >= m_total_bytes) {
-            m_result = m_total_sent;
-            return true;
-        }
-
-        detail::consumeWritevIovecs(m_iovecs, sent_once);
-        return false;
-    }
-
     void rebuildIovecs() {
         RpcPayloadView payload_view = m_response.payloadView();
         const size_t body_size = sizeof(uint16_t) + payload_view.size();
@@ -714,22 +482,22 @@ private:
         header.serialize(m_header.data());
 
         m_error_code = rpcHtons(static_cast<uint16_t>(m_response.errorCode()));
-        m_total_bytes = RPC_HEADER_SIZE + body_size;
+        this->m_total_bytes = RPC_HEADER_SIZE + body_size;
 
-        m_iovecs.clear();
-        m_iovecs.reserve(3);
-        m_iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
-        m_iovecs.push_back(iovec{&m_error_code, sizeof(m_error_code)});
+        this->m_iovecs.clear();
+        this->m_iovecs.reserve(3);
+        this->m_iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+        this->m_iovecs.push_back(iovec{&m_error_code, sizeof(m_error_code)});
 
         if (payload_view.segment1_len > 0) {
-            m_iovecs.push_back(iovec{
+            this->m_iovecs.push_back(iovec{
                 const_cast<char*>(payload_view.segment1),
                 payload_view.segment1_len
             });
         }
 
         if (payload_view.segment2_len > 0) {
-            m_iovecs.push_back(iovec{
+            this->m_iovecs.push_back(iovec{
                 const_cast<char*>(payload_view.segment2),
                 payload_view.segment2_len
             });
@@ -740,222 +508,108 @@ private:
     const RpcResponse& m_response;
     std::array<char, RPC_HEADER_SIZE> m_header{};
     uint16_t m_error_code = 0;
-    size_t m_total_bytes = 0;
-    size_t m_total_sent = 0;
 };
 
 /**
  * @brief 发送原始数据等待体（用于流式传输）
  */
 template<typename SocketType>
-class SendRawDataAwaitable : public TimeoutSupport<SendRawDataAwaitable<SocketType>>
+class SendRawDataAwaitable
+    : public ResumableWriteAwaitable<SendRawDataAwaitable<SocketType>, SocketType>
 {
+    using Base = ResumableWriteAwaitable<SendRawDataAwaitable<SocketType>, SocketType>;
 public:
-    using WritevAwaitableType = decltype(std::declval<SocketType>().writev(std::declval<std::vector<iovec>>()));
-
     SendRawDataAwaitable(std::vector<char>&& data, SocketType& socket)
-        : m_socket(socket)
+        : Base(socket)
         , m_data(std::move(data))
-        , m_sent(0)
     {
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        if (!m_writev_awaitable) {
-            std::vector<iovec> iovecs(1);
-            iovecs[0].iov_base = m_data.data() + m_sent;
-            iovecs[0].iov_len = m_data.size() - m_sent;
-            m_writev_awaitable.emplace(m_socket.writev(std::move(iovecs)));
+        this->m_total_bytes = m_data.size();
+        if (this->m_total_bytes > 0) {
+            this->m_iovecs.push_back(iovec{m_data.data(), this->m_total_bytes});
         }
-        return m_writev_awaitable->await_suspend(handle);
     }
+
+    bool await_ready() const noexcept { return m_data.empty(); }
 
     std::expected<bool, RpcError> await_resume() {
-        auto writev_result = m_writev_awaitable->await_resume();
-        m_writev_awaitable.reset();
-
-        if (!writev_result) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Send failed"));
-        }
-
-        m_sent += writev_result.value();
-
-        if (m_sent >= m_data.size()) {
+        if (m_data.empty()) {
             return true;
         }
-
-        return false;
+        return Base::await_resume();
     }
 
 private:
-    SocketType& m_socket;
     std::vector<char> m_data;
-    size_t m_sent;
-    std::optional<WritevAwaitableType> m_writev_awaitable;
 };
 
 /**
  * @brief 读取消息头等待体（用于流式传输）
  */
 template<typename SocketType>
-class GetRpcHeaderAwaitable : public TimeoutSupport<GetRpcHeaderAwaitable<SocketType>>
+class GetRpcHeaderAwaitable
+    : public RingBufferReadAwaitable<GetRpcHeaderAwaitable<SocketType>, SocketType>
 {
+    using Base = RingBufferReadAwaitable<GetRpcHeaderAwaitable<SocketType>, SocketType>;
+    friend Base;
 public:
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
-
     GetRpcHeaderAwaitable(RingBuffer& ring_buffer, RpcHeader& header, SocketType& socket)
-        : m_ring_buffer(ring_buffer)
+        : Base(ring_buffer, socket)
         , m_header(header)
-        , m_socket(socket)
-    {
-    }
+    {}
 
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
-        }
-        return m_readv_awaitable->await_suspend(handle);
-    }
-
-    std::expected<bool, RpcError> await_resume() {
-        auto readv_result = m_readv_awaitable->await_resume();
-        m_readv_awaitable.reset();
-
-        if (!readv_result) {
-            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
-                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed by peer"));
-            }
-            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
+private:
+    std::expected<bool, RpcError> parseFromRingBuffer() {
+        auto read_iovecs = this->ringBuffer().getReadIovecs();
+        if (detail::iovecsReadableBytes(read_iovecs) < RPC_HEADER_SIZE) {
+            return false;
         }
 
-        ssize_t bytes_read = readv_result.value();
-        if (bytes_read == 0) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-        }
-
-        m_ring_buffer.produce(bytes_read);
-
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
-        size_t total_readable = 0;
-        for (const auto& iov : read_iovecs) {
-            total_readable += iov.iov_len;
-        }
-
-        if (total_readable < RPC_HEADER_SIZE) {
-            return false;  // 需要继续读取
-        }
-
-        // 线性化头部数据
         char header_buf[RPC_HEADER_SIZE];
-        size_t copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, RPC_HEADER_SIZE - copied);
-            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= RPC_HEADER_SIZE) break;
-        }
+        detail::copyFromIovecs(read_iovecs, 0, header_buf, RPC_HEADER_SIZE);
 
         if (!m_header.deserialize(header_buf)) {
             return std::unexpected(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
         }
 
-        m_ring_buffer.consume(RPC_HEADER_SIZE);
+        this->ringBuffer().consume(RPC_HEADER_SIZE);
         return true;
     }
 
 private:
-    RingBuffer& m_ring_buffer;
     RpcHeader& m_header;
-    SocketType& m_socket;
-    std::optional<ReadvAwaitableType> m_readv_awaitable;
 };
 
 /**
  * @brief 读取消息体等待体（用于流式传输）
  */
 template<typename SocketType>
-class GetRpcBodyAwaitable : public TimeoutSupport<GetRpcBodyAwaitable<SocketType>>
+class GetRpcBodyAwaitable
+    : public RingBufferReadAwaitable<GetRpcBodyAwaitable<SocketType>, SocketType>
 {
+    using Base = RingBufferReadAwaitable<GetRpcBodyAwaitable<SocketType>, SocketType>;
+    friend Base;
 public:
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
-
     GetRpcBodyAwaitable(RingBuffer& ring_buffer, char* body, size_t body_len, SocketType& socket)
-        : m_ring_buffer(ring_buffer)
+        : Base(ring_buffer, socket)
         , m_body(body)
         , m_body_len(body_len)
-        , m_socket(socket)
-    {
-    }
+    {}
 
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
-        }
-        return m_readv_awaitable->await_suspend(handle);
-    }
-
-    std::expected<bool, RpcError> await_resume() {
-        auto readv_result = m_readv_awaitable->await_resume();
-        m_readv_awaitable.reset();
-
-        if (!readv_result) {
-            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
-                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed by peer"));
-            }
-            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
+private:
+    std::expected<bool, RpcError> parseFromRingBuffer() {
+        auto read_iovecs = this->ringBuffer().getReadIovecs();
+        if (detail::iovecsReadableBytes(read_iovecs) < m_body_len) {
+            return false;
         }
 
-        ssize_t bytes_read = readv_result.value();
-        if (bytes_read == 0) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-        }
-
-        m_ring_buffer.produce(bytes_read);
-
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
-        size_t total_readable = 0;
-        for (const auto& iov : read_iovecs) {
-            total_readable += iov.iov_len;
-        }
-
-        if (total_readable < m_body_len) {
-            return false;  // 需要继续读取
-        }
-
-        // 拷贝消息体
-        size_t copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, m_body_len - copied);
-            std::memcpy(m_body + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= m_body_len) break;
-        }
-
-        m_ring_buffer.consume(m_body_len);
+        detail::copyFromIovecs(read_iovecs, 0, m_body, m_body_len);
+        this->ringBuffer().consume(m_body_len);
         return true;
     }
 
 private:
-    RingBuffer& m_ring_buffer;
     char* m_body;
     size_t m_body_len;
-    SocketType& m_socket;
-    std::optional<ReadvAwaitableType> m_readv_awaitable;
 };
 
 /**
@@ -978,7 +632,7 @@ public:
     /**
      * @brief 获取RPC请求
      * @param request 输出请求对象
-     * @return 等待体，返回true表示解析完成，false表示需要继续读取
+     * @return 等待体，co_await返回后表示请求已完整解析
      */
     GetRpcRequestAwaitable<SocketType> getRequest(RpcRequest& request) {
         return GetRpcRequestAwaitable<SocketType>(m_ring_buffer, m_setting, request, m_socket);
@@ -1151,7 +805,6 @@ private:
         return ring_buffer_size == 0 ? kDefaultRingBufferSize : ring_buffer_size;
     }
 
-private:
     SocketType m_socket;
     RingBuffer m_ring_buffer;
     RpcReaderSetting m_reader_setting;

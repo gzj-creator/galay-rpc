@@ -320,20 +320,13 @@ private:
         RouteCacheEntry* last_hit = nullptr;
 
         while (m_running.load(std::memory_order_acquire)) {
-            // 读取请求（循环等待完整消息）
+            // 读取请求（co_await直到完整消息）
             RpcRequest request;
-
-            while (true) {
-                auto result = co_await reader.getRequest(request);
-                if (!result) {
-                    // 错误，关闭连接
-                    co_await conn.close();
-                    co_return;
-                }
-                if (result.value()) {
-                    break;  // 解析完成
-                }
-                // result.value() == false，继续读取
+            auto result = co_await reader.getRequest(request);
+            if (!result) {
+                // 错误，关闭连接
+                co_await conn.close();
+                co_return;
             }
 
             // 处理请求
@@ -368,16 +361,11 @@ private:
                 co_await (*handler)(ctx).wait();
             }
 
-            // 发送响应（循环等待发送完成）
-            while (true) {
-                auto result = co_await writer.sendResponse(response);
-                if (!result) {
-                    co_await conn.close();
-                    co_return;
-                }
-                if (result.value()) {
-                    break;  // 发送完成
-                }
+            // 发送响应（co_await直到完整发送）
+            result = co_await writer.sendResponse(response);
+            if (!result) {
+                co_await conn.close();
+                co_return;
             }
         }
 

@@ -6,43 +6,31 @@
  *
  * @details 提供双向流式RPC调用支持，参考 galay-http WebSocket 的设计模式。
  *
- * 使用方式（循环发送/接收）：
+ * 使用方式（单次co_await等待完整发送/接收）：
  * @code
  * // 客户端双向流
- * Coroutine biStreamExample(RpcStreamConn& stream) {
+ * Coroutine biStreamExample(RpcStream& stream) {
  *     auto& writer = stream.getWriter();
  *     auto& reader = stream.getReader();
  *
- *     // 发送消息（循环直到完成）
- *     while (true) {
- *         auto result = co_await writer.sendData("Hello");
- *         if (!result) { // 错误
- *             break;
- *         }
- *         if (result.value()) { // 发送完成
- *             break;
- *         }
- *         // 继续发送
+ *     // 发送消息（内部会自动续发直到完成）
+ *     auto send_result = co_await writer.sendData("Hello");
+ *     if (!send_result) {
+ *         co_return;
  *     }
  *
- *     // 接收消息（循环直到完成）
+ *     // 接收消息（内部会自动续读直到完整消息）
  *     StreamMessage msg;
- *     while (true) {
- *         auto result = co_await reader.getMessage(msg);
- *         if (!result) { // 错误
- *             break;
- *         }
- *         if (result.value()) { // 接收完成
- *             std::cout << "Received: " << msg.payloadStr() << "\n";
- *             break;
- *         }
- *         // 继续接收
+ *     auto recv_result = co_await reader.getMessage(msg);
+ *     if (!recv_result) {
+ *         co_return;
  *     }
+ *     std::cout << "Received: " << msg.payloadStr() << "\n";
  *
  *     // 结束流
- *     while (true) {
- *         auto result = co_await writer.sendEnd();
- *         if (!result || result.value()) break;
+ *     auto end_result = co_await writer.sendEnd();
+ *     if (!end_result) {
+ *         co_return;
  *     }
  * }
  * @endcode
@@ -54,10 +42,8 @@
 #include "RpcConn.h"
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcBase.h"
-#include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/kernel/Timeout.hpp"
-#include <atomic>
-#include <optional>
+#include <string>
+#include <utility>
 
 namespace galay::rpc
 {
@@ -218,127 +204,59 @@ template<typename SocketType> class StreamWriterImpl;
  * @brief 流数据发送等待体
  */
 template<typename SocketType>
-class SendStreamDataAwaitable : public TimeoutSupport<SendStreamDataAwaitable<SocketType>>
+class SendStreamDataAwaitable
+    : public ResumableWriteAwaitable<SendStreamDataAwaitable<SocketType>, SocketType>
 {
+    using Base = ResumableWriteAwaitable<SendStreamDataAwaitable<SocketType>, SocketType>;
 public:
-    using WritevAwaitableType = decltype(std::declval<SocketType>().writev(std::declval<std::vector<iovec>>()));
-
     SendStreamDataAwaitable(SocketType& socket, std::vector<char>&& data)
-        : m_socket(socket)
+        : Base(socket)
         , m_data(std::move(data))
-        , m_sent(0)
-    {}
-
-    bool await_ready() const noexcept { return false; }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        if (!m_writev_awaitable) {
-            std::vector<iovec> iovecs(1);
-            iovecs[0].iov_base = m_data.data() + m_sent;
-            iovecs[0].iov_len = m_data.size() - m_sent;
-            m_writev_awaitable.emplace(m_socket.writev(std::move(iovecs)));
+    {
+        this->m_total_bytes = m_data.size();
+        if (this->m_total_bytes > 0) {
+            this->m_iovecs.push_back(iovec{m_data.data(), this->m_total_bytes});
         }
-        return m_writev_awaitable->await_suspend(handle);
     }
 
+    bool await_ready() const noexcept { return m_data.empty(); }
+
     std::expected<bool, RpcError> await_resume() {
-        auto result = m_writev_awaitable->await_resume();
-        m_writev_awaitable.reset();
-
-        if (!result) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Send failed"));
+        if (m_data.empty()) {
+            return true;
         }
-
-        m_sent += result.value();
-        if (m_sent >= m_data.size()) {
-            return true;  // 发送完成
-        }
-        return false;  // 需要继续发送
+        return Base::await_resume();
     }
 
 private:
-    SocketType& m_socket;
     std::vector<char> m_data;
-    size_t m_sent;
-    std::optional<WritevAwaitableType> m_writev_awaitable;
-
-public:
-    std::expected<bool, IOError> m_result;  // TimeoutSupport 需要
 };
 
 /**
  * @brief 流消息接收等待体
  */
 template<typename SocketType>
-class GetStreamMessageAwaitable : public TimeoutSupport<GetStreamMessageAwaitable<SocketType>>
+class GetStreamMessageAwaitable
+    : public RingBufferReadAwaitable<GetStreamMessageAwaitable<SocketType>, SocketType>
 {
-public:
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+    using Base = RingBufferReadAwaitable<GetStreamMessageAwaitable<SocketType>, SocketType>;
+    friend Base;
 
+public:
     GetStreamMessageAwaitable(RingBuffer& ring_buffer, SocketType& socket, StreamMessage& msg)
-        : m_ring_buffer(ring_buffer)
-        , m_socket(socket)
+        : Base(ring_buffer, socket)
         , m_message(msg)
         , m_state(State::ReadHeader)
         , m_body_length(0)
     {}
 
-    bool await_ready() const noexcept { return false; }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        auto parse_result = parseFromRingBuffer();
-        if (!parse_result.has_value() || parse_result.value()) {
-            m_cached_result.emplace(std::move(parse_result));
-            return false;
-        }
-
-        if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
-        }
-        return m_readv_awaitable->await_suspend(handle);
-    }
-
-    std::expected<bool, RpcError> await_resume() {
-        if (m_cached_result.has_value()) {
-            auto result = std::move(m_cached_result.value());
-            m_cached_result.reset();
-            return result;
-        }
-
-        if (!m_readv_awaitable) {
-            return parseFromRingBuffer();
-        }
-
-        auto result = m_readv_awaitable->await_resume();
-        m_readv_awaitable.reset();
-
-        if (!result) {
-            if (IOError::contains(result.error().code(), kDisconnectError)) {
-                return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-            }
-            return std::unexpected(RpcError(RpcErrorCode::INTERNAL_ERROR, result.error().message()));
-        }
-
-        ssize_t bytes_read = result.value();
-        if (bytes_read == 0) {
-            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-        }
-
-        m_ring_buffer.produce(bytes_read);
-        return parseFromRingBuffer();
-    }
-
 private:
     enum class State { ReadHeader, ReadBody };
 
     std::expected<bool, RpcError> parseFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
-        size_t total_readable = 0;
-        for (const auto& iov : read_iovecs) {
-            total_readable += iov.iov_len;
-        }
+        auto& rb = this->ringBuffer();
+        auto read_iovecs = rb.getReadIovecs();
+        size_t total_readable = detail::iovecsReadableBytes(read_iovecs);
 
         if (m_state == State::ReadHeader) {
             if (total_readable < RPC_HEADER_SIZE) {
@@ -346,19 +264,13 @@ private:
             }
 
             char header_buf[RPC_HEADER_SIZE];
-            size_t copied = 0;
-            for (const auto& iov : read_iovecs) {
-                size_t to_copy = std::min(iov.iov_len, RPC_HEADER_SIZE - copied);
-                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-                copied += to_copy;
-                if (copied >= RPC_HEADER_SIZE) break;
-            }
+            detail::copyFromIovecs(read_iovecs, 0, header_buf, RPC_HEADER_SIZE);
 
             if (!m_header.deserialize(header_buf)) {
                 return std::unexpected(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
             }
 
-            m_ring_buffer.consume(RPC_HEADER_SIZE);
+            rb.consume(RPC_HEADER_SIZE);
             m_body_length = m_header.m_body_length;
             m_message.streamId(m_header.m_request_id);
 
@@ -380,27 +292,16 @@ private:
         }
 
         if (m_state == State::ReadBody) {
-            read_iovecs = m_ring_buffer.getReadIovecs();
-            total_readable = 0;
-            for (const auto& iov : read_iovecs) {
-                total_readable += iov.iov_len;
-            }
-
-            if (total_readable < m_body_length) {
+            read_iovecs = rb.getReadIovecs();
+            if (detail::iovecsReadableBytes(read_iovecs) < m_body_length) {
                 return false;
             }
 
             std::vector<char> body(m_body_length);
-            size_t copied = 0;
-            for (const auto& iov : read_iovecs) {
-                size_t to_copy = std::min(iov.iov_len, m_body_length - copied);
-                std::memcpy(body.data() + copied, iov.iov_base, to_copy);
-                copied += to_copy;
-                if (copied >= m_body_length) break;
-            }
+            detail::copyFromIovecs(read_iovecs, 0, body.data(), m_body_length);
 
             m_message.deserializeBody(body.data(), body.size());
-            m_ring_buffer.consume(m_body_length);
+            rb.consume(m_body_length);
             m_state = State::ReadHeader;
             return true;
         }
@@ -408,17 +309,10 @@ private:
         return false;
     }
 
-    RingBuffer& m_ring_buffer;
-    SocketType& m_socket;
     StreamMessage& m_message;
     State m_state;
     RpcHeader m_header;
     size_t m_body_length;
-    std::optional<ReadvAwaitableType> m_readv_awaitable;
-    std::optional<std::expected<bool, RpcError>> m_cached_result;
-
-public:
-    std::expected<bool, IOError> m_result;  // TimeoutSupport 需要
 };
 
 /**
@@ -428,22 +322,22 @@ template<typename SocketType>
 class StreamReaderImpl {
 public:
     StreamReaderImpl(RingBuffer& ring_buffer, SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_socket(&socket)
     {}
 
     /**
      * @brief 获取流消息
      * @param msg 输出消息
-     * @return 等待体，返回 true 表示接收完成，false 表示需要继续
+     * @return 等待体，co_await返回后表示一条完整流消息
      */
     GetStreamMessageAwaitable<SocketType> getMessage(StreamMessage& msg) {
-        return GetStreamMessageAwaitable<SocketType>(m_ring_buffer, m_socket, msg);
+        return GetStreamMessageAwaitable<SocketType>(*m_ring_buffer, *m_socket, msg);
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer = nullptr;
+    SocketType* m_socket = nullptr;
 };
 
 /**
@@ -453,7 +347,7 @@ template<typename SocketType>
 class StreamWriterImpl {
 public:
     StreamWriterImpl(SocketType& socket, uint32_t stream_id)
-        : m_socket(socket)
+        : m_socket(&socket)
         , m_stream_id(stream_id)
     {}
 
@@ -462,7 +356,7 @@ public:
      */
     SendStreamDataAwaitable<SocketType> sendData(const char* data, size_t len) {
         StreamMessage msg(m_stream_id, data, len);
-        return SendStreamDataAwaitable<SocketType>(m_socket, msg.serialize(RpcMessageType::STREAM_DATA));
+        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_DATA));
     }
 
     SendStreamDataAwaitable<SocketType> sendData(const std::string& data) {
@@ -474,7 +368,7 @@ public:
      */
     SendStreamDataAwaitable<SocketType> sendInit(const std::string& service, const std::string& method) {
         StreamInitRequest init(m_stream_id, service, method);
-        return SendStreamDataAwaitable<SocketType>(m_socket, init.serialize());
+        return SendStreamDataAwaitable<SocketType>(*m_socket, init.serialize());
     }
 
     /**
@@ -482,7 +376,7 @@ public:
      */
     SendStreamDataAwaitable<SocketType> sendInitAck() {
         StreamMessage msg(m_stream_id, nullptr, 0);
-        return SendStreamDataAwaitable<SocketType>(m_socket, msg.serialize(RpcMessageType::STREAM_INIT_ACK));
+        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_INIT_ACK));
     }
 
     /**
@@ -490,7 +384,7 @@ public:
      */
     SendStreamDataAwaitable<SocketType> sendEnd() {
         StreamMessage msg(m_stream_id, nullptr, 0);
-        return SendStreamDataAwaitable<SocketType>(m_socket, msg.serialize(RpcMessageType::STREAM_END));
+        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_END));
     }
 
     /**
@@ -498,40 +392,75 @@ public:
      */
     SendStreamDataAwaitable<SocketType> sendCancel() {
         StreamMessage msg(m_stream_id, nullptr, 0);
-        return SendStreamDataAwaitable<SocketType>(m_socket, msg.serialize(RpcMessageType::STREAM_CANCEL));
+        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_CANCEL));
     }
 
 private:
-    SocketType& m_socket;
+    SocketType* m_socket = nullptr;
     uint32_t m_stream_id;
 };
 
 /**
- * @brief RPC流连接
+ * @brief RPC流会话
  */
 template<typename SocketType>
-class RpcStreamConnImpl {
+class RpcStreamImpl {
 public:
-    RpcStreamConnImpl(SocketType& socket, RingBuffer& ring_buffer, uint32_t stream_id)
-        : m_socket(socket)
-        , m_ring_buffer(ring_buffer)
+    RpcStreamImpl(SocketType& socket,
+                  RingBuffer& ring_buffer,
+                  uint32_t stream_id,
+                  std::string service_name = {},
+                  std::string method_name = {})
+        : m_socket(&socket)
+        , m_ring_buffer(&ring_buffer)
         , m_stream_id(stream_id)
+        , m_service_name(std::move(service_name))
+        , m_method_name(std::move(method_name))
         , m_reader(ring_buffer, socket)
         , m_writer(socket, stream_id)
     {}
 
     uint32_t streamId() const { return m_stream_id; }
+    const std::string& serviceName() const { return m_service_name; }
+    const std::string& methodName() const { return m_method_name; }
+
+    void setRoute(std::string service_name, std::string method_name) {
+        m_service_name = std::move(service_name);
+        m_method_name = std::move(method_name);
+    }
 
     StreamReaderImpl<SocketType>& getReader() { return m_reader; }
     StreamWriterImpl<SocketType>& getWriter() { return m_writer; }
 
-    SocketType& socket() { return m_socket; }
-    RingBuffer& ringBuffer() { return m_ring_buffer; }
+    GetStreamMessageAwaitable<SocketType> read(StreamMessage& msg) {
+        return m_reader.getMessage(msg);
+    }
+
+    SendStreamDataAwaitable<SocketType> sendInit() {
+        return m_writer.sendInit(m_service_name, m_method_name);
+    }
+
+    SendStreamDataAwaitable<SocketType> sendInit(const std::string& service, const std::string& method) {
+        m_service_name = service;
+        m_method_name = method;
+        return m_writer.sendInit(service, method);
+    }
+
+    SendStreamDataAwaitable<SocketType> sendInitAck() { return m_writer.sendInitAck(); }
+    SendStreamDataAwaitable<SocketType> sendData(const char* data, size_t len) { return m_writer.sendData(data, len); }
+    SendStreamDataAwaitable<SocketType> sendData(const std::string& data) { return m_writer.sendData(data); }
+    SendStreamDataAwaitable<SocketType> sendEnd() { return m_writer.sendEnd(); }
+    SendStreamDataAwaitable<SocketType> sendCancel() { return m_writer.sendCancel(); }
+
+    SocketType& socket() { return *m_socket; }
+    RingBuffer& ringBuffer() { return *m_ring_buffer; }
 
 private:
-    SocketType& m_socket;
-    RingBuffer& m_ring_buffer;
+    SocketType* m_socket = nullptr;
+    RingBuffer* m_ring_buffer = nullptr;
     uint32_t m_stream_id;
+    std::string m_service_name;
+    std::string m_method_name;
     StreamReaderImpl<SocketType> m_reader;
     StreamWriterImpl<SocketType> m_writer;
 };
@@ -539,7 +468,7 @@ private:
 // 类型别名
 using StreamReader = StreamReaderImpl<TcpSocket>;
 using StreamWriter = StreamWriterImpl<TcpSocket>;
-using RpcStreamConn = RpcStreamConnImpl<TcpSocket>;
+using RpcStream = RpcStreamImpl<TcpSocket>;
 
 } // namespace galay::rpc
 

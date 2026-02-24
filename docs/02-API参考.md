@@ -249,6 +249,7 @@ public:
 
 ```cpp
 using RpcMethodHandler = std::function<kernel::Coroutine(RpcContext&)>;
+using RpcStreamHandler = std::function<kernel::Coroutine(RpcStream&)>;
 ```
 
 RPC 方法处理函数类型，接收 `RpcContext` 引用，返回协程。
@@ -279,6 +280,11 @@ protected:
     // 注册成员方法（成员函数指针，自动绑定 this）
     template<typename T>
     void registerMethod(std::string_view name, Coroutine (T::*method)(RpcContext&));
+
+    // 注册真实流方法（STREAM_* 协议）
+    void registerStreamMethod(std::string_view name, RpcStreamHandler handler);
+    template<typename T>
+    void registerStreamMethod(std::string_view name, Coroutine (T::*method)(RpcStream&));
 };
 ```
 
@@ -541,6 +547,13 @@ public:
                            const std::string& payload);
     RpcCallAwaitable& call(const std::string& service, const std::string& method);
 
+    // 创建流会话（不暴露底层 socket/ringBuffer）
+    std::expected<RpcStream, RpcError> createStream(const std::string& service,
+                                                    const std::string& method);
+    std::expected<RpcStream, RpcError> createStream(uint32_t stream_id,
+                                                    const std::string& service = {},
+                                                    const std::string& method = {});
+
     // 关闭连接
     CloseAwaitable close();
 
@@ -548,7 +561,7 @@ public:
     RpcReader getReader();
     RpcWriter getWriter();
 
-    // 获取底层 socket 和 RingBuffer
+    // 获取底层 socket 和 RingBuffer（仅框架扩展时建议使用）
     TcpSocket& socket();
     RingBuffer& ringBuffer();
 };
@@ -697,16 +710,31 @@ public:
 };
 ```
 
-#### RpcStreamConn (RpcStreamConnImpl\<TcpSocket\>)
+#### RpcStream (RpcStreamImpl\<TcpSocket\>)
 
 ```cpp
-class RpcStreamConn {
+class RpcStream {
 public:
-    RpcStreamConn(TcpSocket& socket, RingBuffer& ring_buffer, uint32_t stream_id);
+    RpcStream(TcpSocket& socket, RingBuffer& ring_buffer, uint32_t stream_id,
+              std::string service_name = {}, std::string method_name = {});
 
     uint32_t streamId() const;
+    const std::string& serviceName() const;
+    const std::string& methodName() const;
+    void setRoute(std::string service_name, std::string method_name);
+
     StreamReader& getReader();
     StreamWriter& getWriter();
+
+    GetStreamMessageAwaitable<TcpSocket> read(StreamMessage& msg);
+    SendStreamDataAwaitable<TcpSocket> sendInit();
+    SendStreamDataAwaitable<TcpSocket> sendInit(const std::string& service, const std::string& method);
+    SendStreamDataAwaitable<TcpSocket> sendInitAck();
+    SendStreamDataAwaitable<TcpSocket> sendData(const char* data, size_t len);
+    SendStreamDataAwaitable<TcpSocket> sendData(const std::string& data);
+    SendStreamDataAwaitable<TcpSocket> sendEnd();
+    SendStreamDataAwaitable<TcpSocket> sendCancel();
+
     TcpSocket& socket();
     RingBuffer& ringBuffer();
 };
@@ -715,30 +743,52 @@ public:
 **使用示例：**
 
 ```cpp
-Coroutine biStreamExample(RpcStreamConn& stream) {
-    auto& writer = stream.getWriter();
-    auto& reader = stream.getReader();
-
+Coroutine biStreamExample(RpcStream& stream) {
     // 发送数据
     while (true) {
-        auto result = co_await writer.sendData("Hello");
+        auto result = co_await stream.sendData("Hello");
         if (!result || result.value()) break;
     }
 
     // 接收数据
     StreamMessage msg;
     while (true) {
-        auto result = co_await reader.getMessage(msg);
+        auto result = co_await stream.read(msg);
         if (!result || result.value()) break;
     }
     // msg.payloadStr() 获取数据
 
     // 结束流
     while (true) {
-        auto result = co_await writer.sendEnd();
+        auto result = co_await stream.sendEnd();
         if (!result || result.value()) break;
     }
 }
+```
+
+### RpcStreamServer.h
+
+流式服务器，按 `STREAM_INIT` 的 `service/method` 路由到 `RpcService::registerStreamMethod`。
+
+```cpp
+struct RpcStreamServerConfig {
+    std::string host = "0.0.0.0";
+    uint16_t port = 9100;
+    int backlog = 1024;
+    size_t io_scheduler_count = 0;
+    size_t compute_scheduler_count = 0;
+    size_t ring_buffer_size = 128 * 1024;
+};
+
+class RpcStreamServer {
+public:
+    explicit RpcStreamServer(const RpcStreamServerConfig& config);
+    void registerService(std::shared_ptr<RpcService> service);
+    void start();
+    void stop();
+    bool isRunning() const;
+    Runtime& runtime();
+};
 ```
 
 ---

@@ -30,6 +30,7 @@
 #define GALAY_RPC_CLIENT_H
 
 #include "RpcConn.h"
+#include "RpcStream.h"
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-kernel/kernel/Awaitable.h"
@@ -47,16 +48,6 @@ using namespace galay::kernel;
 // 前向声明
 template<typename SocketType>
 class RpcClientImpl;
-
-inline RpcError ioErrorToRpcError(const IOError& io_error) {
-    RpcErrorCode rpc_error_code = RpcErrorCode::INTERNAL_ERROR;
-    if (io_error.code() == kTimeout) {
-        rpc_error_code = RpcErrorCode::REQUEST_TIMEOUT;
-    } else if (IOError::contains(io_error.code(), kDisconnectError)) {
-        rpc_error_code = RpcErrorCode::CONNECTION_CLOSED;
-    }
-    return RpcError(rpc_error_code, io_error.message());
-}
 
 template<typename SocketType>
 class RecvRpcResponseChainAwaitable : public ReadvIOContext {
@@ -122,7 +113,7 @@ private:
         }
 
         if (!m_result.has_value()) {
-            m_rpc_result = std::unexpected(ioErrorToRpcError(m_result.error()));
+            m_rpc_result = std::unexpected(detail::ioErrorToRpcError(m_result.error()));
             m_terminal = true;
             return true;
         }
@@ -233,11 +224,11 @@ public:
         onCompleted();
 
         if (!m_result.has_value()) {
-            return std::unexpected(ioErrorToRpcError(m_result.error()));
+            return std::unexpected(detail::ioErrorToRpcError(m_result.error()));
         }
 
         if (!m_send_awaitable.m_result.has_value()) {
-            return std::unexpected(ioErrorToRpcError(m_send_awaitable.m_result.error()));
+            return std::unexpected(detail::ioErrorToRpcError(m_send_awaitable.m_result.error()));
         }
 
         if (!m_recv_awaitable.result().has_value()) {
@@ -285,6 +276,7 @@ public:
         , m_ring_buffer(nullptr)
         , m_config(config)
         , m_request_id(0)
+        , m_stream_id(1)
     {
     }
 
@@ -402,6 +394,32 @@ public:
     }
 
     /**
+     * @brief 创建流会话（自动分配 stream_id）
+     *
+     * @note 仅创建会话对象，不会自动执行 STREAM_INIT。
+     */
+    std::expected<RpcStreamImpl<SocketType>, RpcError> createStream(const std::string& service,
+                                                                     const std::string& method) {
+        const uint32_t stream_id = m_stream_id.fetch_add(1, std::memory_order_relaxed);
+        return createStream(stream_id, service, method);
+    }
+
+    /**
+     * @brief 创建流会话（显式指定 stream_id）
+     *
+     * @note 仅创建会话对象，不会自动执行 STREAM_INIT。
+     */
+    std::expected<RpcStreamImpl<SocketType>, RpcError> createStream(uint32_t stream_id,
+                                                                     const std::string& service = {},
+                                                                     const std::string& method = {}) {
+        if (!m_socket || !m_ring_buffer) {
+            return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED,
+                                            "Client is not connected"));
+        }
+        return RpcStreamImpl<SocketType>(*m_socket, *m_ring_buffer, stream_id, service, method);
+    }
+
+    /**
      * @brief 关闭连接
      */
     CloseAwaitable close() {
@@ -442,6 +460,7 @@ private:
     std::unique_ptr<RingBuffer> m_ring_buffer;
     RpcClientConfig m_config;
     std::atomic<uint32_t> m_request_id;
+    std::atomic<uint32_t> m_stream_id;
 };
 
 // 类型别名

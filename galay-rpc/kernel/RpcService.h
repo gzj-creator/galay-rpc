@@ -28,6 +28,7 @@
 
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcError.h"
+#include "RpcStream.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include <array>
 #include <string>
@@ -44,6 +45,7 @@ class RpcContext;
  * @brief RPC方法处理函数类型
  */
 using RpcMethodHandler = std::function<kernel::Coroutine(RpcContext&)>;
+using RpcStreamHandler = std::function<kernel::Coroutine(RpcStream&)>;
 
 /**
  * @brief RPC服务基类
@@ -96,6 +98,14 @@ public:
         return &it->second.handlers[mode_idx];
     }
 
+    RpcStreamHandler* findStreamMethod(const std::string& method) {
+        auto it = m_stream_session_methods.find(method);
+        if (it != m_stream_session_methods.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
+
     /**
      * @brief 获取所有方法名
      */
@@ -107,6 +117,12 @@ public:
         }
         for (const auto& [name, _] : m_stream_methods) {
             if (m_unary_methods.find(name) == m_unary_methods.end()) {
+                names.push_back(name);
+            }
+        }
+        for (const auto& [name, _] : m_stream_session_methods) {
+            if (m_unary_methods.find(name) == m_unary_methods.end() &&
+                m_stream_methods.find(name) == m_stream_methods.end()) {
                 names.push_back(name);
             }
         }
@@ -168,6 +184,18 @@ protected:
         registerMemberMethod(name, RpcCallMode::BIDI_STREAMING, method);
     }
 
+    void registerStreamMethod(std::string_view name, RpcStreamHandler handler) {
+        m_stream_session_methods[std::string(name)] = std::move(handler);
+    }
+
+    template<typename T>
+    void registerStreamMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcStream&)) {
+        m_stream_session_methods[std::string(name)] =
+            [this, method](RpcStream& stream) -> kernel::Coroutine {
+                return (static_cast<T*>(this)->*method)(stream);
+            };
+    }
+
 private:
     struct RpcMethodSlots {
         std::array<RpcMethodHandler, kStreamRpcModeCount> handlers{};
@@ -215,6 +243,7 @@ private:
     std::string m_name;
     std::unordered_map<std::string, RpcMethodHandler> m_unary_methods;
     std::unordered_map<std::string, RpcMethodSlots> m_stream_methods;
+    std::unordered_map<std::string, RpcStreamHandler> m_stream_session_methods;
 };
 
 /**

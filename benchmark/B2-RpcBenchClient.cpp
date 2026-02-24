@@ -146,19 +146,14 @@ Coroutine benchWorker(const BenchConfig& config) {
                 });
                 const auto send_start = std::chrono::steady_clock::now();
 
-                while (true) {
-                    auto send_result = co_await writer.sendRequest(request);
-                    if (!send_result.has_value()) {
-                        reconnect_needed = true;
-                        break;
-                    }
-                    if (send_result.value()) {
-                        inflight_entries.push_back(InflightEntry{
-                            request.requestId(),
-                            send_start
-                        });
-                        break;
-                    }
+                auto send_result = co_await writer.sendRequest(request);
+                if (!send_result.has_value()) {
+                    reconnect_needed = true;
+                } else {
+                    inflight_entries.push_back(InflightEntry{
+                        request.requestId(),
+                        send_start
+                    });
                 }
             }
 
@@ -167,15 +162,9 @@ Coroutine benchWorker(const BenchConfig& config) {
             }
 
             RpcResponse response;
-            while (true) {
-                auto recv_result = co_await reader.getResponse(response);
-                if (!recv_result.has_value()) {
-                    reconnect_needed = true;
-                    break;
-                }
-                if (recv_result.value()) {
-                    break;
-                }
+            auto recv_result = co_await reader.getResponse(response);
+            if (!recv_result.has_value()) {
+                reconnect_needed = true;
             }
 
             if (reconnect_needed) {

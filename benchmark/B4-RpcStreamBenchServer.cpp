@@ -3,9 +3,8 @@
  * @brief 真实流式 RPC 压测服务端
  */
 
-#include "galay-rpc/kernel/RpcStream.h"
-#include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/kernel/Runtime.h"
+#include "galay-rpc/kernel/RpcService.h"
+#include "galay-rpc/kernel/RpcStreamServer.h"
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -13,21 +12,13 @@
 #include <cstdlib>
 #include <iostream>
 #include <thread>
-#include <unordered_map>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
-using namespace galay::async;
 
 namespace {
 constexpr uint16_t kDefaultPort = 9100;
 constexpr size_t kDefaultRingBufferSize = 128 * 1024;
-constexpr int kDefaultBacklog = 1024;
-
-struct StreamSession {
-    uint64_t frames = 0;
-    uint64_t bytes = 0;
-};
 
 std::atomic<bool> g_running{true};
 
@@ -35,190 +26,70 @@ void signalHandler(int) {
     g_running.store(false, std::memory_order_release);
 }
 
-Coroutine handleStreamConnection(GHandle handle, size_t ring_buffer_size) {
-    TcpSocket socket(handle);
-    if (!socket.option().handleNonBlock().has_value()) {
-        co_return;
+class StreamBenchService : public RpcService {
+public:
+    StreamBenchService()
+        : RpcService("StreamBenchService") {
+        registerStreamMethod("echo", &StreamBenchService::echo);
     }
 
-    RingBuffer ring_buffer(ring_buffer_size);
-    StreamReader reader(ring_buffer, socket);
-    std::unordered_map<uint32_t, StreamSession> sessions;
+    Coroutine echo(RpcStream& stream) {
+        uint64_t frames = 0;
+        uint64_t bytes = 0;
 
-    while (g_running.load(std::memory_order_acquire)) {
-        StreamMessage message;
-        auto recv_awaitable = reader.getMessage(message);
         while (true) {
-            auto recv_result = co_await recv_awaitable;
+            StreamMessage msg;
+            auto recv_result = co_await stream.read(msg);
             if (!recv_result.has_value()) {
-                co_await socket.close();
                 co_return;
             }
-            if (recv_result.value()) {
-                break;
-            }
-        }
 
-        const RpcMessageType type = message.messageType();
-        const uint32_t stream_id = message.streamId();
-        StreamWriter writer(socket, stream_id);
+            if (msg.messageType() == RpcMessageType::STREAM_DATA) {
+                frames += 1;
+                bytes += msg.payload().size();
 
-        if (type == RpcMessageType::STREAM_INIT) {
-            StreamInitRequest init_req;
-            if (!init_req.deserializeBody(message.payload().data(), message.payload().size())) {
-                auto cancel_awaitable = writer.sendCancel();
-                while (true) {
-                    auto send_result = co_await cancel_awaitable;
-                    if (!send_result.has_value() || send_result.value()) {
-                        break;
-                    }
+                auto send_result = co_await stream.sendData(msg.payload().data(), msg.payload().size());
+                if (!send_result.has_value()) {
+                    co_return;
                 }
                 continue;
             }
 
-            sessions[stream_id] = StreamSession{};
-
-            auto ack_awaitable = writer.sendInitAck();
-            while (true) {
-                auto send_result = co_await ack_awaitable;
-                if (!send_result.has_value()) {
-                    co_await socket.close();
-                    co_return;
-                }
-                if (send_result.value()) {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        if (type == RpcMessageType::STREAM_DATA) {
-            auto session_it = sessions.find(stream_id);
-            if (session_it == sessions.end()) {
-                auto cancel_awaitable = writer.sendCancel();
-                while (true) {
-                    auto send_result = co_await cancel_awaitable;
-                    if (!send_result.has_value() || send_result.value()) {
-                        break;
-                    }
-                }
-                continue;
-            }
-
-            session_it->second.frames += 1;
-            session_it->second.bytes += message.payload().size();
-
-            auto echo_awaitable = writer.sendData(message.payload().data(), message.payload().size());
-            while (true) {
-                auto send_result = co_await echo_awaitable;
-                if (!send_result.has_value()) {
-                    co_await socket.close();
-                    co_return;
-                }
-                if (send_result.value()) {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        if (type == RpcMessageType::STREAM_END) {
-            auto session_it = sessions.find(stream_id);
-            if (session_it != sessions.end()) {
-                const auto& session = session_it->second;
+            if (msg.messageType() == RpcMessageType::STREAM_END) {
                 const std::string summary =
-                    "frames=" + std::to_string(session.frames) +
-                    ", bytes=" + std::to_string(session.bytes);
+                    "frames=" + std::to_string(frames) +
+                    ", bytes=" + std::to_string(bytes);
 
-                auto summary_awaitable = writer.sendData(summary.data(), summary.size());
-                while (true) {
-                    auto send_result = co_await summary_awaitable;
-                    if (!send_result.has_value()) {
-                        co_await socket.close();
-                        co_return;
-                    }
-                    if (send_result.value()) {
-                        break;
-                    }
-                }
-
-                sessions.erase(session_it);
-            }
-
-            auto end_awaitable = writer.sendEnd();
-            while (true) {
-                auto send_result = co_await end_awaitable;
+                auto send_result = co_await stream.sendData(summary.data(), summary.size());
                 if (!send_result.has_value()) {
-                    co_await socket.close();
                     co_return;
                 }
-                if (send_result.value()) {
-                    break;
-                }
-            }
-            continue;
-        }
 
-        if (type == RpcMessageType::STREAM_CANCEL) {
-            sessions.erase(stream_id);
-            auto cancel_awaitable = writer.sendCancel();
-            while (true) {
-                auto send_result = co_await cancel_awaitable;
+                send_result = co_await stream.sendEnd();
                 if (!send_result.has_value()) {
-                    co_await socket.close();
                     co_return;
                 }
-                if (send_result.value()) {
-                    break;
-                }
+
+                co_return;
             }
+
+            if (msg.messageType() == RpcMessageType::STREAM_CANCEL) {
+                co_return;
+            }
+
+            (void)co_await stream.sendCancel();
+            co_return;
         }
     }
-
-    co_await socket.close();
-    co_return;
-}
-
-Coroutine acceptLoop(Runtime& runtime, const std::string& host, uint16_t port, size_t ring_buffer_size) {
-    TcpSocket listener(IPType::IPV4);
-
-    auto reuse_addr_result = listener.option().handleReuseAddr();
-    if (!reuse_addr_result.has_value()) {
-        co_return;
-    }
-
-    auto non_block_result = listener.option().handleNonBlock();
-    if (!non_block_result.has_value()) {
-        co_return;
-    }
-
-    Host listen_host(IPType::IPV4, host, port);
-    if (!listener.bind(listen_host).has_value()) {
-        co_return;
-    }
-
-    if (!listener.listen(kDefaultBacklog).has_value()) {
-        co_return;
-    }
-
-    while (g_running.load(std::memory_order_acquire)) {
-        Host client_host;
-        auto accept_result = co_await listener.accept(&client_host);
-        if (!accept_result.has_value()) {
-            continue;
-        }
-
-        runtime.getNextIOScheduler()->spawn(handleStreamConnection(accept_result.value(), ring_buffer_size));
-    }
-
-    co_await listener.close();
-    co_return;
-}
+};
 } // namespace
 
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
+#if defined(SIGPIPE)
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     uint16_t port = kDefaultPort;
     size_t io_count = 0;
@@ -234,22 +105,30 @@ int main(int argc, char* argv[]) {
         ring_buffer_size = static_cast<size_t>(std::strtoull(argv[3], nullptr, 10));
     }
 
+    RpcStreamServerConfig config;
+    config.host = "0.0.0.0";
+    config.port = port;
+    config.io_scheduler_count = io_count;
+    config.ring_buffer_size = ring_buffer_size;
+    config.backlog = 1024;
+
+    RpcStreamServer server(config);
+    server.registerService(std::make_shared<StreamBenchService>());
+    server.start();
+
     std::cout << "=== RPC Stream Benchmark Server ===\n";
-    std::cout << "Port: " << port << "\n";
-    std::cout << "IO Schedulers: " << (io_count == 0 ? "auto" : std::to_string(io_count)) << "\n";
-    std::cout << "RingBuffer size: " << ring_buffer_size << " bytes\n";
-
-    Runtime runtime(io_count, 1);
-    runtime.start();
-
-    runtime.getNextIOScheduler()->spawn(acceptLoop(runtime, "0.0.0.0", port, ring_buffer_size));
-
+    std::cout << "Port: " << config.port << "\n";
+    std::cout << "IO Schedulers: "
+              << (config.io_scheduler_count == 0 ? "auto" : std::to_string(config.io_scheduler_count))
+              << "\n";
+    std::cout << "RingBuffer size: " << config.ring_buffer_size << " bytes\n";
     std::cout << "Stream benchmark server started. Press Ctrl+C to stop.\n";
-    while (g_running.load(std::memory_order_acquire)) {
+
+    while (g_running.load(std::memory_order_acquire) && server.isRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    runtime.stop();
+    server.stop();
     std::cout << "Stream benchmark server stopped.\n";
     return 0;
 }

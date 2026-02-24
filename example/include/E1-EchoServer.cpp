@@ -78,6 +78,9 @@ void signalHandler(int) {
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
+#if defined(SIGPIPE)
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     uint16_t port = 9000;
     if (argc > 1) {

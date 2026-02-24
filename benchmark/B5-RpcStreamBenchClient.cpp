@@ -109,38 +109,27 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
 
         while (g_running.load(std::memory_order_relaxed) && !reconnect_needed) {
             const uint32_t stream_id = next_stream_id++;
-            RpcStreamConn stream(client.socket(), client.ringBuffer(), stream_id);
-            auto& writer = stream.getWriter();
-            auto& reader = stream.getReader();
+            auto stream_result = client.createStream(stream_id, "StreamBenchService", "echo");
+            if (!stream_result.has_value()) {
+                reconnect_needed = true;
+                break;
+            }
+            auto stream = stream_result.value();
 
             const auto stream_start = std::chrono::steady_clock::now();
 
-            auto init_awaitable = writer.sendInit("StreamBenchService", "echo");
-            while (true) {
-                auto send_result = co_await init_awaitable;
-                if (!send_result.has_value()) {
-                    reconnect_needed = true;
-                    break;
-                }
-                if (send_result.value()) {
-                    break;
-                }
+            auto send_result = co_await stream.sendInit();
+            if (!send_result.has_value()) {
+                reconnect_needed = true;
             }
             if (reconnect_needed) {
                 break;
             }
 
             StreamMessage init_ack;
-            auto init_ack_awaitable = reader.getMessage(init_ack);
-            while (true) {
-                auto recv_result = co_await init_ack_awaitable;
-                if (!recv_result.has_value()) {
-                    reconnect_needed = true;
-                    break;
-                }
-                if (recv_result.value()) {
-                    break;
-                }
+            auto recv_result = co_await stream.read(init_ack);
+            if (!recv_result.has_value()) {
+                reconnect_needed = true;
             }
             if (reconnect_needed) {
                 break;
@@ -159,16 +148,9 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                 while (sent_frames < config.frames_per_stream &&
                        sent_frames - recv_frames < frame_window &&
                        g_running.load(std::memory_order_relaxed)) {
-                    auto send_data_awaitable = writer.sendData(payload.data(), payload.size());
-                    while (true) {
-                        auto send_result = co_await send_data_awaitable;
-                        if (!send_result.has_value()) {
-                            reconnect_needed = true;
-                            break;
-                        }
-                        if (send_result.value()) {
-                            break;
-                        }
+                    send_result = co_await stream.sendData(payload.data(), payload.size());
+                    if (!send_result.has_value()) {
+                        reconnect_needed = true;
                     }
                     if (reconnect_needed) {
                         break;
@@ -184,16 +166,9 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                 }
 
                 StreamMessage echo_frame;
-                auto recv_data_awaitable = reader.getMessage(echo_frame);
-                while (true) {
-                    auto recv_result = co_await recv_data_awaitable;
-                    if (!recv_result.has_value()) {
-                        reconnect_needed = true;
-                        break;
-                    }
-                    if (recv_result.value()) {
-                        break;
-                    }
+                recv_result = co_await stream.read(echo_frame);
+                if (!recv_result.has_value()) {
+                    reconnect_needed = true;
                 }
                 if (reconnect_needed) {
                     break;
@@ -216,16 +191,9 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                 break;
             }
 
-            auto end_awaitable = writer.sendEnd();
-            while (true) {
-                auto send_result = co_await end_awaitable;
-                if (!send_result.has_value()) {
-                    reconnect_needed = true;
-                    break;
-                }
-                if (send_result.value()) {
-                    break;
-                }
+            send_result = co_await stream.sendEnd();
+            if (!send_result.has_value()) {
+                reconnect_needed = true;
             }
             if (reconnect_needed) {
                 break;
@@ -234,16 +202,9 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
             bool got_end = false;
             while (!got_end) {
                 StreamMessage tail_frame;
-                auto recv_tail_awaitable = reader.getMessage(tail_frame);
-                while (true) {
-                    auto recv_result = co_await recv_tail_awaitable;
-                    if (!recv_result.has_value()) {
-                        reconnect_needed = true;
-                        break;
-                    }
-                    if (recv_result.value()) {
-                        break;
-                    }
+                recv_result = co_await stream.read(tail_frame);
+                if (!recv_result.has_value()) {
+                    reconnect_needed = true;
                 }
 
                 if (reconnect_needed) {

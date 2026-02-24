@@ -13,6 +13,7 @@ export {
 #include "galay-rpc/kernel/RpcConn.h"
 #include "galay-rpc/kernel/RpcService.h"
 #include "galay-rpc/kernel/RpcServer.h"
+#include "galay-rpc/kernel/RpcStreamServer.h"
 #include "galay-rpc/kernel/RpcClient.h"
 #include "galay-rpc/kernel/RpcStream.h"
 #include "galay-rpc/kernel/ServiceDiscovery.h"

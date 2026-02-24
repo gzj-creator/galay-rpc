@@ -38,35 +38,27 @@ Coroutine runStreamClient(const std::string& host,
     }
 
     const uint32_t stream_id = 1;
-    RpcStreamConn stream(client.socket(), client.ringBuffer(), stream_id);
-    auto& writer = stream.getWriter();
-    auto& reader = stream.getReader();
+    auto stream_result = client.createStream(stream_id, "StreamExampleService", "echo");
+    if (!stream_result.has_value()) {
+        std::cerr << "create stream failed: " << stream_result.error().message() << "\n";
+        co_await client.close();
+        co_return;
+    }
+    auto stream = stream_result.value();
 
-    auto init_awaitable = writer.sendInit("StreamExampleService", "echo");
-    while (true) {
-        auto send_result = co_await init_awaitable;
-        if (!send_result.has_value()) {
-            std::cerr << "send init failed: " << send_result.error().message() << "\n";
-            co_await client.close();
-            co_return;
-        }
-        if (send_result.value()) {
-            break;
-        }
+    auto send_result = co_await stream.sendInit();
+    if (!send_result.has_value()) {
+        std::cerr << "send init failed: " << send_result.error().message() << "\n";
+        co_await client.close();
+        co_return;
     }
 
     StreamMessage init_ack;
-    auto init_ack_awaitable = reader.getMessage(init_ack);
-    while (true) {
-        auto recv_result = co_await init_ack_awaitable;
-        if (!recv_result.has_value()) {
-            std::cerr << "recv init ack failed: " << recv_result.error().message() << "\n";
-            co_await client.close();
-            co_return;
-        }
-        if (recv_result.value()) {
-            break;
-        }
+    auto recv_result = co_await stream.read(init_ack);
+    if (!recv_result.has_value()) {
+        std::cerr << "recv init ack failed: " << recv_result.error().message() << "\n";
+        co_await client.close();
+        co_return;
     }
 
     if (init_ack.messageType() != RpcMessageType::STREAM_INIT_ACK) {
@@ -86,31 +78,19 @@ Coroutine runStreamClient(const std::string& host,
             std::memcpy(payload.data(), &frame_id, sizeof(frame_id));
         }
 
-        auto send_data_awaitable = writer.sendData(payload.data(), payload.size());
-        while (true) {
-            auto send_result = co_await send_data_awaitable;
-            if (!send_result.has_value()) {
-                std::cerr << "send frame failed: " << send_result.error().message() << "\n";
-                co_await client.close();
-                co_return;
-            }
-            if (send_result.value()) {
-                break;
-            }
+        send_result = co_await stream.sendData(payload.data(), payload.size());
+        if (!send_result.has_value()) {
+            std::cerr << "send frame failed: " << send_result.error().message() << "\n";
+            co_await client.close();
+            co_return;
         }
 
         StreamMessage echo_frame;
-        auto recv_data_awaitable = reader.getMessage(echo_frame);
-        while (true) {
-            auto recv_result = co_await recv_data_awaitable;
-            if (!recv_result.has_value()) {
-                std::cerr << "recv echo frame failed: " << recv_result.error().message() << "\n";
-                co_await client.close();
-                co_return;
-            }
-            if (recv_result.value()) {
-                break;
-            }
+        recv_result = co_await stream.read(echo_frame);
+        if (!recv_result.has_value()) {
+            std::cerr << "recv echo frame failed: " << recv_result.error().message() << "\n";
+            co_await client.close();
+            co_return;
         }
 
         if (echo_frame.messageType() != RpcMessageType::STREAM_DATA) {
@@ -123,34 +103,22 @@ Coroutine runStreamClient(const std::string& host,
         total_echo_bytes += echo_frame.payload().size();
     }
 
-    auto send_end_awaitable = writer.sendEnd();
-    while (true) {
-        auto send_result = co_await send_end_awaitable;
-        if (!send_result.has_value()) {
-            std::cerr << "send end failed: " << send_result.error().message() << "\n";
-            co_await client.close();
-            co_return;
-        }
-        if (send_result.value()) {
-            break;
-        }
+    send_result = co_await stream.sendEnd();
+    if (!send_result.has_value()) {
+        std::cerr << "send end failed: " << send_result.error().message() << "\n";
+        co_await client.close();
+        co_return;
     }
 
     std::string summary;
     bool got_end = false;
     while (!got_end) {
         StreamMessage msg;
-        auto recv_awaitable = reader.getMessage(msg);
-        while (true) {
-            auto recv_result = co_await recv_awaitable;
-            if (!recv_result.has_value()) {
-                std::cerr << "recv tail frame failed: " << recv_result.error().message() << "\n";
-                co_await client.close();
-                co_return;
-            }
-            if (recv_result.value()) {
-                break;
-            }
+        recv_result = co_await stream.read(msg);
+        if (!recv_result.has_value()) {
+            std::cerr << "recv tail frame failed: " << recv_result.error().message() << "\n";
+            co_await client.close();
+            co_return;
         }
 
         if (msg.messageType() == RpcMessageType::STREAM_DATA) {
