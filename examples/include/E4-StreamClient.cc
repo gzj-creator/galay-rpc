@@ -1,5 +1,5 @@
 /**
- * @file E4-StreamClient.cpp
+ * @file E4-StreamClient.cc
  * @brief 真实流式 RPC 客户端示例
  *
  * @details 模拟完整流生命周期：INIT -> 多帧 DATA 双向收发 -> END。

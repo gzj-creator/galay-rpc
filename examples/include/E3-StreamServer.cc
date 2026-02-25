@@ -1,10 +1,16 @@
 /**
- * @file E3-StreamServerImport.cpp
- * @brief 真实流式 RPC 服务端示例（C++23 import 版本）
+ * @file E3-StreamServer.cc
+ * @brief 真实流式 RPC 服务端示例
+ *
+ * @details STREAM_INIT 到达后自动按 service/method 路由，
+ *          回调入参为 RpcStream，业务层只处理流读写。
+ *
+ * Usage:
+ *   ./E3-StreamServer [port] [io_count] [ring_buffer_size]
  */
 
-import galay.rpc;
-
+#include "galay-rpc/kernel/RpcService.h"
+#include "galay-rpc/kernel/RpcStreamServer.h"
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -116,7 +122,7 @@ int main(int argc, char* argv[]) {
     server.registerService(std::make_shared<StreamExampleService>());
     server.start();
 
-    std::cout << "=== Stream RPC Server Example (import) ===\n";
+    std::cout << "=== Stream RPC Server Example ===\n";
     std::cout << "listen: " << config.host << ":" << config.port << "\n";
     std::cout << "io_schedulers: " << (config.io_scheduler_count == 0 ? "auto" : std::to_string(config.io_scheduler_count)) << "\n";
     std::cout << "ring_buffer: " << config.ring_buffer_size << " bytes\n";

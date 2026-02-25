@@ -102,7 +102,7 @@ endif()
 
 # 示例
 if(BUILD_EXAMPLES)
-    add_subdirectory(example)
+    add_subdirectory(examples)
 endif()
 
 # 安装

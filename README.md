@@ -10,7 +10,7 @@
 - 真实流协议：支持 `STREAM_INIT` / `STREAM_DATA` / `STREAM_END` 生命周期
 - 高效 IO：`RingBuffer + readv/writev`，支持 pipeline 与窗口化收发
 - 服务发现：基于 C++23 Concept 约束的可扩展注册中心接口
-- 工程完整：内置 `example/`、`test/`、`benchmark/`
+- 工程完整：内置 `examples/`、`test/`、`benchmark/`
 
 ## 文档导航
 
@@ -86,20 +86,20 @@ option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) examples" ON)
 
 ```bash
 # 终端 1
-./build/example/E1-EchoServer 9000
+./build/examples/E1-EchoServer 9000
 
 # 终端 2
-./build/example/E2-EchoClient 127.0.0.1 9000
+./build/examples/E2-EchoClient 127.0.0.1 9000
 ```
 
 ### 真实 Stream（STREAM_* 协议）
 
 ```bash
 # 终端 1
-./build/example/E3-StreamServer 9100 1 131072
+./build/examples/E3-StreamServer 9100 1 131072
 
 # 终端 2
-./build/example/E4-StreamClient 127.0.0.1 9100 200 64
+./build/examples/E4-StreamClient 127.0.0.1 9100 200 64
 ```
 
 ### C++23 模块化导入示例（import 版本）
@@ -110,12 +110,12 @@ import galay.rpc;
 
 ```bash
 # Echo import 版本
-./build/example/E1-EchoServerImport 9000
-./build/example/E2-EchoClientImport 127.0.0.1 9000
+./build/examples/E1-EchoServerImport 9000
+./build/examples/E2-EchoClientImport 127.0.0.1 9000
 
 # Stream import 版本
-./build/example/E3-StreamServerImport 9100 1 131072
-./build/example/E4-StreamClientImport 127.0.0.1 9100 200 64
+./build/examples/E3-StreamServerImport 9100 1 131072
+./build/examples/E4-StreamClientImport 127.0.0.1 9100 200 64
 ```
 
 ### 模块支持更新（2026-02）
@@ -207,7 +207,7 @@ galay-rpc/
 │   ├── kernel/         # RpcServer / RpcClient / RpcService / RpcStream / ServiceDiscovery
 │   ├── module/         # C++23 命名模块接口（galay.rpc.cppm）
 │   └── protoc/         # RpcMessage / RpcCodec / RpcError / RpcBase
-├── example/
+├── examples/
 │   ├── common/         # 示例公共配置
 │   ├── include/        # include 版本示例（E1~E4）
 │   └── import/         # import 版本示例（E1~E4）

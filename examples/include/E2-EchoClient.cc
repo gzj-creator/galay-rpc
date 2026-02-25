@@ -1,15 +1,23 @@
 /**
- * @file E2-EchoClientImport.cpp
- * @brief Echo RPC客户端示例（C++23 import 版本）
+ * @file E2-EchoClient.cc
+ * @brief Echo RPC客户端示例（四种调用模式）
+ *
+ * @details 演示 unary / client_stream / server_stream / bidi 四种模式的 echo 调用。
+ *
+ * 使用方法:
+ *   ./E2-EchoClient [host] [port]
+ *
+ * 示例:
+ *   ./E2-EchoClient 127.0.0.1 9000
  */
 
-import galay.rpc;
-
-#include <cstdlib>
+#include "galay-rpc/kernel/RpcClient.h"
+#include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
+#include <thread>
 #include <string>
 #include <string_view>
-#include <thread>
+#include <cstdlib>
 
 using namespace galay::rpc;
 using namespace galay::kernel;
@@ -143,7 +151,7 @@ int main(int argc, char* argv[]) {
         port = static_cast<uint16_t>(std::atoi(argv[2]));
     }
 
-    std::cout << "=== Echo RPC Client Example (4 Modes, import) ===\n\n";
+    std::cout << "=== Echo RPC Client Example (4 Modes) ===\n\n";
 
     Runtime runtime(1, 1);
     runtime.start();

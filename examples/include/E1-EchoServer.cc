@@ -1,5 +1,5 @@
 /**
- * @file E1-EchoServer.cpp
+ * @file E1-EchoServer.cc
  * @brief Echo RPC服务端示例
  *
  * @details 演示如何创建一个简单的RPC服务端

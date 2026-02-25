@@ -1,5 +1,5 @@
 /**
- * @file E4-StreamClientImport.cpp
+ * @file E4-StreamClientImport.cc
  * @brief 真实流式 RPC 客户端示例（C++23 import 版本）
  */
 

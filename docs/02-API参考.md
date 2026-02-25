@@ -1,4 +1,4 @@
-# Galay-RPC API 参考
+# 02-API参考
 
 ## 目录
 
