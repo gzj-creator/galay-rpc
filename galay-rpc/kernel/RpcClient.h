@@ -113,7 +113,7 @@ private:
         }
 
         if (!m_result.has_value()) {
-            m_rpc_result = std::unexpected(detail::ioErrorToRpcError(m_result.error()));
+            m_rpc_result = std::unexpected(RpcError::from(m_result.error()));
             m_terminal = true;
             return true;
         }
@@ -224,11 +224,11 @@ public:
         onCompleted();
 
         if (!m_result.has_value()) {
-            return std::unexpected(detail::ioErrorToRpcError(m_result.error()));
+            return std::unexpected(RpcError::from(m_result.error()));
         }
 
         if (!m_send_awaitable.m_result.has_value()) {
-            return std::unexpected(detail::ioErrorToRpcError(m_send_awaitable.m_result.error()));
+            return std::unexpected(RpcError::from(m_send_awaitable.m_result.error()));
         }
 
         if (!m_recv_awaitable.result().has_value()) {

@@ -14,7 +14,6 @@ option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) examples" ON)
 option(GALAY_RPC_INSTALL_MODULE_INTERFACE "Install C++ module interface files (*.cppm)" ON)
 
 # 查找依赖
-find_package(spdlog REQUIRED)
 find_package(galay-kernel REQUIRED)
 
 # 收集头文件

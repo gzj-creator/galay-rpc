@@ -25,17 +25,6 @@ using namespace galay::kernel;
 
 namespace detail {
 
-inline RpcError ioErrorToRpcError(const IOError& io_error,
-                                   RpcErrorCode default_code = RpcErrorCode::INTERNAL_ERROR) {
-    if (io_error.code() == kTimeout) {
-        return RpcError(RpcErrorCode::REQUEST_TIMEOUT, io_error.message());
-    }
-    if (IOError::contains(io_error.code(), kDisconnectError)) {
-        return RpcError(RpcErrorCode::CONNECTION_CLOSED, io_error.message());
-    }
-    return RpcError(default_code, io_error.message());
-}
-
 inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed) {
     if (consumed == 0 || iovecs.empty()) {
         return;
@@ -200,7 +189,7 @@ public:
         auto writev_result = WritevAwaitable::await_resume();
         if (!writev_result.has_value()) {
             return std::unexpected(
-                detail::ioErrorToRpcError(writev_result.error(), RpcErrorCode::INTERNAL_ERROR));
+                RpcError::from(writev_result.error(), RpcErrorCode::INTERNAL_ERROR));
         }
         return true;
     }

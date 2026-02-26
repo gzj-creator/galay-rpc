@@ -29,7 +29,6 @@
 
 - CMake 3.16+
 - C++23 编译器（GCC 11+ / Clang 14+ / AppleClang 15+）
-- `spdlog`
 - Galay 内部依赖（统一联调推荐）：
   - `galay-kernel`（构建必需）
   - `galay-utils`（推荐）
@@ -38,14 +37,14 @@
 ## 依赖安装（macOS / Homebrew）
 
 ```bash
-brew install cmake spdlog
+brew install cmake
 ```
 
 ## 依赖安装（Ubuntu / Debian）
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y cmake g++ libspdlog-dev
+sudo apt-get install -y cmake g++
 ```
 
 ## 拉取源码（统一联调推荐）
