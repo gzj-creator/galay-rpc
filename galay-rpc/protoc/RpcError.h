@@ -9,6 +9,7 @@
 #define GALAY_RPC_ERROR_H
 
 #include "RpcBase.h"
+#include "galay-kernel/common/Error.h"
 #include <string>
 
 namespace galay::rpc
@@ -35,6 +36,17 @@ public:
     bool isOk() const { return m_code == RpcErrorCode::OK; }
 
     explicit operator bool() const { return !isOk(); }
+
+    static RpcError from(const kernel::IOError& io_error,
+                         RpcErrorCode default_code = RpcErrorCode::INTERNAL_ERROR) {
+        if (kernel::IOError::contains(io_error.code(), kernel::kTimeout)) {
+            return RpcError(RpcErrorCode::REQUEST_TIMEOUT, io_error.message());
+        }
+        if (kernel::IOError::contains(io_error.code(), kernel::kDisconnectError)) {
+            return RpcError(RpcErrorCode::CONNECTION_CLOSED, io_error.message());
+        }
+        return RpcError(default_code, io_error.message());
+    }
 
     std::string toString() const {
         return std::string(rpcErrorCodeToString(m_code)) + ": " + m_message;
