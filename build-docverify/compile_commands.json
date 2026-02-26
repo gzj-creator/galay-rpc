@@ -1,0 +1,74 @@
+[
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/test",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/T1-RpcProtocolTest.dir/T1-RpcProtocolTest.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T1-RpcProtocolTest.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T1-RpcProtocolTest.cpp",
+  "output": "test/CMakeFiles/T1-RpcProtocolTest.dir/T1-RpcProtocolTest.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/test",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/T2-RpcServerTest.dir/T2-RpcServerTest.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T2-RpcServerTest.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T2-RpcServerTest.cpp",
+  "output": "test/CMakeFiles/T2-RpcServerTest.dir/T2-RpcServerTest.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/test",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/T3-RpcClientTest.dir/T3-RpcClientTest.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T3-RpcClientTest.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T3-RpcClientTest.cpp",
+  "output": "test/CMakeFiles/T3-RpcClientTest.dir/T3-RpcClientTest.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/benchmark",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/B1-RpcBenchServer.dir/B1-RpcBenchServer.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B1-RpcBenchServer.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B1-RpcBenchServer.cpp",
+  "output": "benchmark/CMakeFiles/B1-RpcBenchServer.dir/B1-RpcBenchServer.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/benchmark",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/B2-RpcBenchClient.dir/B2-RpcBenchClient.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B2-RpcBenchClient.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B2-RpcBenchClient.cpp",
+  "output": "benchmark/CMakeFiles/B2-RpcBenchClient.dir/B2-RpcBenchClient.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/benchmark",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/B3-ServiceDiscoveryBench.dir/B3-ServiceDiscoveryBench.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B3-ServiceDiscoveryBench.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B3-ServiceDiscoveryBench.cpp",
+  "output": "benchmark/CMakeFiles/B3-ServiceDiscoveryBench.dir/B3-ServiceDiscoveryBench.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/benchmark",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/B4-RpcStreamBenchServer.dir/B4-RpcStreamBenchServer.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B4-RpcStreamBenchServer.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B4-RpcStreamBenchServer.cpp",
+  "output": "benchmark/CMakeFiles/B4-RpcStreamBenchServer.dir/B4-RpcStreamBenchServer.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/benchmark",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/B5-RpcStreamBenchClient.dir/B5-RpcStreamBenchClient.cpp.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B5-RpcStreamBenchClient.cpp",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B5-RpcStreamBenchClient.cpp",
+  "output": "benchmark/CMakeFiles/B5-RpcStreamBenchClient.dir/B5-RpcStreamBenchClient.cpp.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/examples",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/E1-EchoServer.dir/include/E1-EchoServer.cc.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E1-EchoServer.cc",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E1-EchoServer.cc",
+  "output": "examples/CMakeFiles/E1-EchoServer.dir/include/E1-EchoServer.cc.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/examples",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/E2-EchoClient.dir/include/E2-EchoClient.cc.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E2-EchoClient.cc",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E2-EchoClient.cc",
+  "output": "examples/CMakeFiles/E2-EchoClient.dir/include/E2-EchoClient.cc.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/examples",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/E3-StreamServer.dir/include/E3-StreamServer.cc.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E3-StreamServer.cc",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E3-StreamServer.cc",
+  "output": "examples/CMakeFiles/E3-StreamServer.dir/include/E3-StreamServer.cc.o"
+},
+{
+  "directory": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/examples",
+  "command": "/usr/bin/c++  -I/Users/gongzhijie/Desktop/projects/git/galay-rpc -isystem /usr/local/include/galay-kernel -O3 -DNDEBUG -std=c++2b -arch arm64 -o CMakeFiles/E4-StreamClient.dir/include/E4-StreamClient.cc.o -c /Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E4-StreamClient.cc",
+  "file": "/Users/gongzhijie/Desktop/projects/git/galay-rpc/examples/include/E4-StreamClient.cc",
+  "output": "examples/CMakeFiles/E4-StreamClient.dir/include/E4-StreamClient.cc.o"
+}
+]

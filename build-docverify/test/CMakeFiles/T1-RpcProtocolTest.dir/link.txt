@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T1-RpcProtocolTest.dir/T1-RpcProtocolTest.cpp.o" -o T1-RpcProtocolTest  /usr/local/lib/libgalay-kernel.a

@@ -1,0 +1,20 @@
+Start testing: Feb 26 09:33 CST
+----------------------------------------------------------
+1/1 Testing: RpcProtocolTest
+1/1 Test: RpcProtocolTest
+Command: "/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/test/T1-RpcProtocolTest"
+Directory: /Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/test
+"RpcProtocolTest" start time: Feb 26 09:33 CST
+Output:
+----------------------------------------------------------
+Running RPC Protocol Tests...
+Tests completed. Passed: 11, Failed: 0
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"RpcProtocolTest" end time: Feb 26 09:33 CST
+"RpcProtocolTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Feb 26 09:33 CST

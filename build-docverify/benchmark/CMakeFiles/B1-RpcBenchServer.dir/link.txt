@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/B1-RpcBenchServer.dir/B1-RpcBenchServer.cpp.o" -o B1-RpcBenchServer  /usr/local/lib/libgalay-kernel.a

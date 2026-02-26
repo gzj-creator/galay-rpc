@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T2-RpcServerTest.dir/T2-RpcServerTest.cpp.o" -o T2-RpcServerTest  /usr/local/lib/libgalay-kernel.a

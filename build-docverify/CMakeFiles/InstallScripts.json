@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/test/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/benchmark/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-docverify/examples/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

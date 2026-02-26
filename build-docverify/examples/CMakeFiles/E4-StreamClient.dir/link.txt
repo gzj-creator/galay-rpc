@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/E4-StreamClient.dir/include/E4-StreamClient.cc.o" -o E4-StreamClient  /usr/local/lib/libgalay-kernel.a
