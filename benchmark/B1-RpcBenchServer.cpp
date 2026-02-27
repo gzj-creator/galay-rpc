@@ -72,14 +72,13 @@ int main(int argc, char* argv[]) {
 
     auto service = std::make_shared<BenchEchoService>();
 
-    RpcServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = port;
-    config.io_scheduler_count = io_count;
-    config.backlog = kDefaultBacklog;
-    config.ring_buffer_size = ring_buffer_size;
-
-    RpcServer server(config);
+    auto server = RpcServerBuilder()
+        .host("0.0.0.0")
+        .port(port)
+        .ioSchedulerCount(io_count)
+        .backlog(kDefaultBacklog)
+        .ringBufferSize(ring_buffer_size)
+        .build();
     server.registerService(service);
     server.start();
 

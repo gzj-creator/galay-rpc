@@ -22,6 +22,11 @@
 #include <string>
 #include <unordered_map>
 
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
+
 namespace galay::rpc
 {
 
@@ -37,7 +42,28 @@ struct RpcStreamServerConfig {
     int backlog = 1024;                 ///< 监听队列长度
     size_t io_scheduler_count = 0;      ///< IO 调度器数量，0 表示自动
     size_t compute_scheduler_count = 0; ///< 计算调度器数量，0 表示自动
+    std::optional<uint32_t> io_affinity_cpu;      ///< IO 调度器绑核（可选）
+    std::optional<uint32_t> compute_affinity_cpu; ///< 计算调度器绑核（可选）
     size_t ring_buffer_size = 128 * 1024; ///< 每连接 RingBuffer 大小
+};
+
+class RpcStreamServer;
+
+class RpcStreamServerBuilder {
+public:
+    RpcStreamServerBuilder& host(std::string value)                         { m_config.host = std::move(value); return *this; }
+    RpcStreamServerBuilder& port(uint16_t value)                            { m_config.port = value; return *this; }
+    RpcStreamServerBuilder& backlog(int value)                              { m_config.backlog = value; return *this; }
+    RpcStreamServerBuilder& ioSchedulerCount(size_t value)                  { m_config.io_scheduler_count = value; return *this; }
+    RpcStreamServerBuilder& computeSchedulerCount(size_t value)             { m_config.compute_scheduler_count = value; return *this; }
+    RpcStreamServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
+    RpcStreamServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    RpcStreamServerBuilder& ringBufferSize(size_t value)                    { m_config.ring_buffer_size = value; return *this; }
+    RpcStreamServer build() const;
+    RpcStreamServerConfig buildConfig() const                               { return m_config; }
+
+private:
+    RpcStreamServerConfig m_config;
 };
 
 /**
@@ -63,6 +89,7 @@ public:
     void start() {
         m_running.store(true, std::memory_order_release);
         m_runtime.start();
+        applyRuntimeAffinity();
         m_runtime.getNextIOScheduler()->spawn(acceptLoop());
     }
 
@@ -83,6 +110,36 @@ public:
     }
 
 private:
+    void applyRuntimeAffinity() {
+        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
+            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu);
+        }
+        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
+            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu);
+        }
+    }
+
+    template<typename SchedulerType>
+    static void applySchedulerAffinity(SchedulerType* scheduler, const std::optional<uint32_t>& cpu_id) {
+        if (scheduler == nullptr || !cpu_id.has_value()) {
+            return;
+        }
+
+        if (!scheduler->setAffinity(cpu_id)) {
+            return;
+        }
+
+#if defined(__linux__)
+        scheduler->spawn([cpu_id]() -> Coroutine {
+            cpu_set_t cpu_set;
+            CPU_ZERO(&cpu_set);
+            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
+            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
+            co_return;
+        }());
+#endif
+    }
+
     std::expected<RpcStreamHandler*, RpcErrorCode> resolveStreamHandler(const StreamInitRequest& init_req) {
         auto service_it = m_services.find(init_req.serviceName());
         if (service_it == m_services.end()) {
@@ -250,6 +307,8 @@ private:
     std::atomic<bool> m_running{false};
     std::optional<RpcError> m_last_error;
 };
+
+inline RpcStreamServer RpcStreamServerBuilder::build() const { return RpcStreamServer(m_config); }
 
 } // namespace galay::rpc
 

@@ -92,13 +92,11 @@ int main(int argc, char* argv[]) {
     // 创建服务
     auto echoService = std::make_shared<EchoService>();
 
-    // 配置服务器
-    RpcServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = port;
-
     // 创建并启动服务器
-    RpcServer server(config);
+    auto server = RpcServerBuilder()
+        .host("0.0.0.0")
+        .port(port)
+        .build();
     server.registerService(echoService);
     server.start();
 

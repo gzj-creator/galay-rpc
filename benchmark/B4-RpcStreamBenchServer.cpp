@@ -105,23 +105,22 @@ int main(int argc, char* argv[]) {
         ring_buffer_size = static_cast<size_t>(std::strtoull(argv[3], nullptr, 10));
     }
 
-    RpcStreamServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = port;
-    config.io_scheduler_count = io_count;
-    config.ring_buffer_size = ring_buffer_size;
-    config.backlog = 1024;
-
-    RpcStreamServer server(config);
+    auto server = RpcStreamServerBuilder()
+        .host("0.0.0.0")
+        .port(port)
+        .ioSchedulerCount(io_count)
+        .ringBufferSize(ring_buffer_size)
+        .backlog(1024)
+        .build();
     server.registerService(std::make_shared<StreamBenchService>());
     server.start();
 
     std::cout << "=== RPC Stream Benchmark Server ===\n";
-    std::cout << "Port: " << config.port << "\n";
+    std::cout << "Port: " << port << "\n";
     std::cout << "IO Schedulers: "
-              << (config.io_scheduler_count == 0 ? "auto" : std::to_string(config.io_scheduler_count))
+              << (io_count == 0 ? "auto" : std::to_string(io_count))
               << "\n";
-    std::cout << "RingBuffer size: " << config.ring_buffer_size << " bytes\n";
+    std::cout << "RingBuffer size: " << ring_buffer_size << " bytes\n";
     std::cout << "Stream benchmark server started. Press Ctrl+C to stop.\n";
 
     while (g_running.load(std::memory_order_acquire) && server.isRunning()) {

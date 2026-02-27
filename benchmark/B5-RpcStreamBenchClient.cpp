@@ -62,8 +62,7 @@ void signalHandler(int) {
 }
 
 Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
-    RpcClientConfig client_config;
-    client_config.ring_buffer_size =
+    const size_t client_ring_buffer_size =
         std::max<size_t>(kDefaultRpcRingBufferSize,
                          config.payload_size * config.frames_per_stream * 2 + RPC_HEADER_SIZE * 64);
 
@@ -82,7 +81,9 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
     uint32_t next_stream_id = ((worker_id + 1) << 24);
 
     while (g_running.load(std::memory_order_relaxed)) {
-        RpcClient client(client_config);
+        auto client = RpcClientBuilder()
+            .ringBufferSize(client_ring_buffer_size)
+            .build();
 
         bool connected = false;
         for (int retry_count = 0;

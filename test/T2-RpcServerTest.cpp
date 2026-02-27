@@ -89,15 +89,13 @@ int main(int argc, char* argv[]) {
     auto echoService = std::make_shared<EchoService>();
     auto calcService = std::make_shared<CalcService>();
 
-    // 配置服务器
-    RpcServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = port;
-    config.io_scheduler_count = 2;
-    config.compute_scheduler_count = 1;
-
     // 启动服务器
-    RpcServer server(config);
+    auto server = RpcServerBuilder()
+        .host("0.0.0.0")
+        .port(port)
+        .ioSchedulerCount(2)
+        .computeSchedulerCount(1)
+        .build();
     server.registerService(echoService);
     server.registerService(calcService);
     server.start();

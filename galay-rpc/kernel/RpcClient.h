@@ -262,6 +262,18 @@ struct RpcClientConfig {
     size_t ring_buffer_size = kDefaultRpcRingBufferSize;
 };
 
+class RpcClientBuilder {
+public:
+    RpcClientBuilder& readerSetting(RpcReaderSetting setting) { m_config.reader_setting = std::move(setting); return *this; }
+    RpcClientBuilder& writerSetting(RpcWriterSetting setting) { m_config.writer_setting = std::move(setting); return *this; }
+    RpcClientBuilder& ringBufferSize(size_t size)             { m_config.ring_buffer_size = size; return *this; }
+    RpcClientImpl<TcpSocket> build() const;
+    RpcClientConfig buildConfig() const                       { return m_config; }
+
+private:
+    RpcClientConfig m_config;
+};
+
 /**
  * @brief RPC客户端模板类
  */
@@ -466,6 +478,7 @@ private:
 // 类型别名
 using RpcCallAwaitable = RpcCallAwaitableImpl<TcpSocket>;
 using RpcClient = RpcClientImpl<TcpSocket>;
+inline RpcClient RpcClientBuilder::build() const { return RpcClient(m_config); }
 
 } // namespace galay::rpc
 

@@ -26,10 +26,11 @@ Coroutine runStreamClient(const std::string& host,
                           uint16_t port,
                           size_t frame_count,
                           size_t payload_size) {
-    RpcClientConfig config;
-    config.ring_buffer_size = std::max<size_t>(kDefaultRpcRingBufferSize,
-                                                payload_size * 4 + RPC_HEADER_SIZE * 8);
-    RpcClient client(config);
+    const size_t ring_buffer_size = std::max<size_t>(kDefaultRpcRingBufferSize,
+                                                     payload_size * 4 + RPC_HEADER_SIZE * 8);
+    auto client = RpcClientBuilder()
+        .ringBufferSize(ring_buffer_size)
+        .build();
 
     auto connect_result = co_await client.connect(host, port);
     if (!connect_result.has_value()) {

@@ -112,20 +112,19 @@ int main(int argc, char* argv[]) {
         ring_buffer_size = static_cast<size_t>(std::strtoull(argv[3], nullptr, 10));
     }
 
-    RpcStreamServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = port;
-    config.io_scheduler_count = io_count;
-    config.ring_buffer_size = ring_buffer_size;
-
-    RpcStreamServer server(config);
+    auto server = RpcStreamServerBuilder()
+        .host("0.0.0.0")
+        .port(port)
+        .ioSchedulerCount(io_count)
+        .ringBufferSize(ring_buffer_size)
+        .build();
     server.registerService(std::make_shared<StreamExampleService>());
     server.start();
 
     std::cout << "=== Stream RPC Server Example ===\n";
-    std::cout << "listen: " << config.host << ":" << config.port << "\n";
-    std::cout << "io_schedulers: " << (config.io_scheduler_count == 0 ? "auto" : std::to_string(config.io_scheduler_count)) << "\n";
-    std::cout << "ring_buffer: " << config.ring_buffer_size << " bytes\n";
+    std::cout << "listen: 0.0.0.0:" << port << "\n";
+    std::cout << "io_schedulers: " << (io_count == 0 ? "auto" : std::to_string(io_count)) << "\n";
+    std::cout << "ring_buffer: " << ring_buffer_size << " bytes\n";
 
     while (g_running.load(std::memory_order_acquire) && server.isRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
