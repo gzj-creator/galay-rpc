@@ -177,7 +177,7 @@ int main(int argc, char* argv[]) {
               << ", frames=" << frame_count
               << ", payload=" << payload_size << " bytes\n";
 
-    Runtime runtime(1, 1);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(1).build();
     runtime.start();
     runtime.getNextIOScheduler()->spawn(runStreamClient(host, port, frame_count, payload_size));
 

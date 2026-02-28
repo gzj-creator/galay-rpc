@@ -316,7 +316,7 @@ int main(int argc, char* argv[]) {
               << (config.io_schedulers == 0 ? "auto" : std::to_string(config.io_schedulers))
               << "\n\n";
 
-    Runtime runtime(config.io_schedulers, 1);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(config.io_schedulers).computeSchedulerCount(1).build();
     runtime.start();
 
     std::cout << "Starting " << config.connections << " stream connections...\n";

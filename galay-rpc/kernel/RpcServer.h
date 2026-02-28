@@ -56,8 +56,7 @@ struct RpcServerConfig {
     int backlog = 128;                  ///< 监听队列长度
     size_t io_scheduler_count = 0;      ///< IO调度器数量，0表示自动
     size_t compute_scheduler_count = 0; ///< 计算调度器数量，0表示自动
-    std::optional<uint32_t> io_affinity_cpu;      ///< IO 调度器绑核（可选）
-    std::optional<uint32_t> compute_affinity_cpu; ///< 计算调度器绑核（可选）
+    RuntimeAffinityConfig affinity;     ///< 绑核配置
     size_t ring_buffer_size = kDefaultRpcRingBufferSize;  ///< RingBuffer大小
 };
 
@@ -70,8 +69,22 @@ public:
     RpcServerBuilder& backlog(int value)                                 { m_config.backlog = value; return *this; }
     RpcServerBuilder& ioSchedulerCount(size_t value)                     { m_config.io_scheduler_count = value; return *this; }
     RpcServerBuilder& computeSchedulerCount(size_t value)                { m_config.compute_scheduler_count = value; return *this; }
-    RpcServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)         { m_config.io_affinity_cpu = cpu_id; return *this; }
-    RpcServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id)    { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    RpcServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
+        m_config.affinity.seq_io_count = io_count;
+        m_config.affinity.seq_compute_count = compute_count;
+        return *this;
+    }
+    bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
+        if (io_cpus.size() != m_config.io_scheduler_count ||
+            compute_cpus.size() != m_config.compute_scheduler_count) {
+            return false;
+        }
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Custom;
+        m_config.affinity.custom_io_cpus = std::move(io_cpus);
+        m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
+        return true;
+    }
     RpcServerBuilder& ringBufferSize(size_t value)                       { m_config.ring_buffer_size = value; return *this; }
     RpcServer build() const;
     RpcServerConfig buildConfig() const                                  { return m_config; }
@@ -91,8 +104,11 @@ public:
      */
     explicit RpcServer(const RpcServerConfig& config)
         : m_config(config)
-        , m_runtime(config.io_scheduler_count,
-                    config.compute_scheduler_count) {}
+        , m_runtime(RuntimeBuilder()
+                        .ioSchedulerCount(config.io_scheduler_count)
+                        .computeSchedulerCount(config.compute_scheduler_count)
+                        .applyAffinity(config.affinity)
+                        .build()) {}
 
     ~RpcServer() {
         stop();
@@ -112,7 +128,6 @@ public:
     void start() {
         m_running.store(true, std::memory_order_release);
         m_runtime.start();
-        applyRuntimeAffinity();
 
         auto* scheduler = m_runtime.getNextIOScheduler();
         scheduler->spawn(acceptLoop());
@@ -148,36 +163,6 @@ public:
     }
 
 private:
-    void applyRuntimeAffinity() {
-        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu);
-        }
-        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu);
-        }
-    }
-
-    template<typename SchedulerType>
-    static void applySchedulerAffinity(SchedulerType* scheduler, const std::optional<uint32_t>& cpu_id) {
-        if (scheduler == nullptr || !cpu_id.has_value()) {
-            return;
-        }
-
-        if (!scheduler->setAffinity(cpu_id)) {
-            return;
-        }
-
-#if defined(__linux__)
-        scheduler->spawn([cpu_id]() -> Coroutine {
-            cpu_set_t cpu_set;
-            CPU_ZERO(&cpu_set);
-            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
-            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
-            co_return;
-        }());
-#endif
-    }
-
     static constexpr size_t kRouteCacheSize = 8;
     static constexpr size_t kRouteStringReserve = 32;
     static constexpr uint64_t kFnvOffset = 1469598103934665603ull;

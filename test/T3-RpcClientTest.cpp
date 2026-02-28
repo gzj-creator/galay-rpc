@@ -182,7 +182,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "RPC Client Test - Connecting to " << host << ":" << port << "\n";
 
-    Runtime runtime(1, 1);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(1).build();
     runtime.start();
 
     auto* scheduler = runtime.getNextIOScheduler();
