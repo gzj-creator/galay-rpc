@@ -6,12 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 选项
-option(BUILD_TESTS "Build test programs" ON)
-option(BUILD_BENCHMARKS "Build benchmark programs" ON)
-option(BUILD_EXAMPLES "Build example programs" ON)
-option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) examples" ON)
-option(GALAY_RPC_INSTALL_MODULE_INTERFACE "Install C++ module interface files (*.cppm)" ON)
+# 构建选项 / 平台选项
+include(cmake/option.cmake)
+
+# 配置 IO 后端
+configure_io_backend()
 
 # 查找依赖
 find_package(galay-kernel REQUIRED)
