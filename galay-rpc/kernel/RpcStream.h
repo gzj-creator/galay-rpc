@@ -42,7 +42,9 @@
 #include "RpcConn.h"
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcBase.h"
+#include <array>
 #include <string>
+#include <span>
 #include <utility>
 
 namespace galay::rpc
@@ -255,7 +257,9 @@ private:
 
     std::expected<bool, RpcError> parseFromRingBuffer() {
         auto& rb = this->ringBuffer();
-        auto read_iovecs = rb.getReadIovecs();
+        std::array<struct iovec, 2> read_iovecs_storage{};
+        size_t read_iovecs_count = rb.getReadIovecs(read_iovecs_storage);
+        std::span<const struct iovec> read_iovecs(read_iovecs_storage.data(), read_iovecs_count);
         size_t total_readable = detail::iovecsReadableBytes(read_iovecs);
 
         if (m_state == State::ReadHeader) {
@@ -292,7 +296,8 @@ private:
         }
 
         if (m_state == State::ReadBody) {
-            read_iovecs = rb.getReadIovecs();
+            read_iovecs_count = rb.getReadIovecs(read_iovecs_storage);
+            read_iovecs = std::span<const struct iovec>(read_iovecs_storage.data(), read_iovecs_count);
             if (detail::iovecsReadableBytes(read_iovecs) < m_body_length) {
                 return false;
             }

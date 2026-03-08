@@ -14,6 +14,7 @@
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Buffer.h"
+#include <array>
 #include <expected>
 #include <optional>
 #include <vector>
@@ -24,6 +25,11 @@ namespace galay::rpc
 using namespace galay::kernel;
 
 namespace detail {
+
+inline std::array<struct iovec, 1>& emptyIovecs() {
+    static std::array<struct iovec, 1> empty{};
+    return empty;
+}
 
 inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed) {
     if (consumed == 0 || iovecs.empty()) {
@@ -67,7 +73,7 @@ class RingBufferReadAwaitable : public ReadvAwaitable
 {
 public:
     RingBufferReadAwaitable(RingBuffer& ring_buffer, SocketType& socket)
-        : ReadvAwaitable(socket.controller(), {})
+        : ReadvAwaitable(socket.controller(), detail::emptyIovecs(), 0)
         , m_ring_buffer(ring_buffer)
     {}
 
@@ -158,14 +164,19 @@ private:
     }
 
     bool prepareReadIovecs() {
-        m_iovecs = m_ring_buffer.getWriteIovecs();
+        m_read_iovec_count = m_ring_buffer.getWriteIovecs(m_read_iovecs);
+        ReadvIOContext::m_iovecs = std::span<const struct iovec>(m_read_iovecs.data(), m_read_iovec_count);
         size_t writable = 0;
-        for (const auto& iov : m_iovecs) writable += iov.iov_len;
+        for (size_t i = 0; i < m_read_iovec_count; ++i) {
+            writable += m_read_iovecs[i].iov_len;
+        }
         return writable > 0;
     }
 
 private:
     RingBuffer& m_ring_buffer;
+    std::array<struct iovec, 2> m_read_iovecs{};
+    size_t m_read_iovec_count = 0;
     std::optional<std::expected<bool, RpcError>> m_cached_result;
     std::optional<RpcError> m_parse_error;
 };
@@ -182,8 +193,14 @@ class ResumableWriteAwaitable : public WritevAwaitable
 {
 public:
     explicit ResumableWriteAwaitable(SocketType& socket)
-        : WritevAwaitable(socket.controller(), {})
+        : WritevAwaitable(socket.controller(), detail::emptyIovecs(), 0)
     {}
+
+    template<typename Handle>
+    auto await_suspend(Handle handle) {
+        syncWriteIovecs();
+        return WritevAwaitable::await_suspend(handle);
+    }
 
     std::expected<bool, RpcError> await_resume() {
         auto writev_result = WritevAwaitable::await_resume();
@@ -228,14 +245,21 @@ private:
         m_total_sent += sent_once;
         if (m_total_sent >= m_total_bytes) {
             m_result = m_total_sent;
+            syncWriteIovecs();
             return true;
         }
 
         detail::consumeWritevIovecs(m_iovecs, sent_once);
+        syncWriteIovecs();
         return false;
     }
 
 protected:
+    void syncWriteIovecs() {
+        WritevIOContext::m_iovecs = std::span<const struct iovec>(m_iovecs.data(), m_iovecs.size());
+    }
+
+    std::vector<iovec> m_iovecs;
     size_t m_total_bytes = 0;
     size_t m_total_sent = 0;
 };

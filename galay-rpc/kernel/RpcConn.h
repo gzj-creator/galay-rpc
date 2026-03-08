@@ -20,6 +20,7 @@
 #include <array>
 #include <cstring>
 #include <expected>
+#include <span>
 
 namespace galay::rpc
 {
@@ -37,7 +38,7 @@ inline constexpr size_t kDefaultRpcRingBufferSize = 8 * 1024;
 
 namespace detail {
 
-inline size_t iovecsReadableBytes(const std::vector<iovec>& iovecs) {
+inline size_t iovecsReadableBytes(std::span<const iovec> iovecs) {
     size_t total = 0;
     for (const auto& iov : iovecs) {
         total += iov.iov_len;
@@ -45,7 +46,7 @@ inline size_t iovecsReadableBytes(const std::vector<iovec>& iovecs) {
     return total;
 }
 
-inline bool copyFromIovecs(const std::vector<iovec>& iovecs,
+inline bool copyFromIovecs(std::span<const iovec> iovecs,
                            size_t src_offset,
                            char* out,
                            size_t bytes) {
@@ -73,7 +74,7 @@ inline bool copyFromIovecs(const std::vector<iovec>& iovecs,
     return copied == bytes;
 }
 
-inline bool payloadViewFromIovecs(const std::vector<iovec>& iovecs,
+inline bool payloadViewFromIovecs(std::span<const iovec> iovecs,
                                   size_t src_offset,
                                   size_t bytes,
                                   RpcPayloadView& view) {
@@ -117,7 +118,7 @@ inline bool payloadViewFromIovecs(const std::vector<iovec>& iovecs,
     return remaining == 0;
 }
 
-inline std::expected<size_t, RpcError> tryParseRequestMessage(const std::vector<iovec>& iovecs,
+inline std::expected<size_t, RpcError> tryParseRequestMessage(std::span<const iovec> iovecs,
                                                               size_t total_readable,
                                                               size_t max_message_size,
                                                               RpcRequest& request) {
@@ -199,7 +200,7 @@ inline std::expected<size_t, RpcError> tryParseRequestMessage(const std::vector<
     return msg_len;
 }
 
-inline std::expected<size_t, RpcError> tryParseResponseMessage(const std::vector<iovec>& iovecs,
+inline std::expected<size_t, RpcError> tryParseResponseMessage(std::span<const iovec> iovecs,
                                                                size_t total_readable,
                                                                size_t max_message_size,
                                                                RpcResponse& response) {
@@ -297,13 +298,15 @@ private:
             return false;
         }
 
-        auto read_iovecs = this->ringBuffer().getReadIovecs();
-        if (read_iovecs.empty()) {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
+        if (read_iovecs_count == 0) {
             return false;
         }
 
-        const size_t total_readable = detail::iovecsReadableBytes(read_iovecs);
-        auto parse_result = detail::tryParseRequestMessage(read_iovecs,
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        const size_t total_readable = detail::iovecsReadableBytes(read_span);
+        auto parse_result = detail::tryParseRequestMessage(read_span,
                                                            total_readable,
                                                            m_setting.max_message_size,
                                                            m_request);
@@ -349,13 +352,15 @@ private:
             return false;
         }
 
-        auto read_iovecs = this->ringBuffer().getReadIovecs();
-        if (read_iovecs.empty()) {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
+        if (read_iovecs_count == 0) {
             return false;
         }
 
-        const size_t total_readable = detail::iovecsReadableBytes(read_iovecs);
-        auto parse_result = detail::tryParseResponseMessage(read_iovecs,
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        const size_t total_readable = detail::iovecsReadableBytes(read_span);
+        auto parse_result = detail::tryParseResponseMessage(read_span,
                                                             total_readable,
                                                             m_setting.max_message_size,
                                                             m_response);
@@ -559,13 +564,15 @@ public:
 
 private:
     std::expected<bool, RpcError> parseFromRingBuffer() {
-        auto read_iovecs = this->ringBuffer().getReadIovecs();
-        if (detail::iovecsReadableBytes(read_iovecs) < RPC_HEADER_SIZE) {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        if (detail::iovecsReadableBytes(read_span) < RPC_HEADER_SIZE) {
             return false;
         }
 
         char header_buf[RPC_HEADER_SIZE];
-        detail::copyFromIovecs(read_iovecs, 0, header_buf, RPC_HEADER_SIZE);
+        detail::copyFromIovecs(read_span, 0, header_buf, RPC_HEADER_SIZE);
 
         if (!m_header.deserialize(header_buf)) {
             return std::unexpected(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
@@ -597,12 +604,14 @@ public:
 
 private:
     std::expected<bool, RpcError> parseFromRingBuffer() {
-        auto read_iovecs = this->ringBuffer().getReadIovecs();
-        if (detail::iovecsReadableBytes(read_iovecs) < m_body_len) {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        if (detail::iovecsReadableBytes(read_span) < m_body_len) {
             return false;
         }
 
-        detail::copyFromIovecs(read_iovecs, 0, m_body, m_body_len);
+        detail::copyFromIovecs(read_span, 0, m_body, m_body_len);
         this->ringBuffer().consume(m_body_len);
         return true;
     }

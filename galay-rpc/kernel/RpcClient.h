@@ -35,6 +35,7 @@
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Timeout.hpp"
+#include <array>
 #include <atomic>
 #include <expected>
 #include <memory>
@@ -56,7 +57,7 @@ public:
                                   const RpcReaderSetting& setting,
                                   uint32_t expected_request_id,
                                   RpcResponse& response)
-        : ReadvIOContext({})
+        : ReadvIOContext(emptyIovecs(), 0)
         , m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_expected_request_id(expected_request_id)
@@ -86,6 +87,11 @@ public:
     }
 
 private:
+    static std::array<struct iovec, 1>& emptyIovecs() {
+        static std::array<struct iovec, 1> empty{};
+        return empty;
+    }
+
     template<typename CompleteFn>
     bool handleCompleteImpl(CompleteFn&& complete_fn) {
         if (m_terminal) {
@@ -143,8 +149,9 @@ private:
     }
 
     bool prepareReadIovecs() {
-        m_iovecs = m_ring_buffer.getWriteIovecs();
-        if (m_iovecs.empty() || m_iovecs.front().iov_len == 0) {
+        m_read_iovec_count = m_ring_buffer.getWriteIovecs(m_read_iovecs);
+        ReadvIOContext::m_iovecs = std::span<const struct iovec>(m_read_iovecs.data(), m_read_iovec_count);
+        if (m_read_iovec_count == 0 || m_read_iovecs[0].iov_len == 0) {
             m_rpc_result = std::unexpected(RpcError(RpcErrorCode::INVALID_RESPONSE,
                                                     "No writable ring buffer space while receiving response"));
             return false;
@@ -157,13 +164,15 @@ private:
             return false;
         }
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
-        if (read_iovecs.empty()) {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovec_count = m_ring_buffer.getReadIovecs(read_iovecs);
+        if (read_iovec_count == 0) {
             return false;
         }
 
-        const size_t total_readable = detail::iovecsReadableBytes(read_iovecs);
-        auto parse_result = detail::tryParseResponseMessage(read_iovecs,
+        const std::span<const struct iovec> read_span(read_iovecs.data(), read_iovec_count);
+        const size_t total_readable = detail::iovecsReadableBytes(read_span);
+        auto parse_result = detail::tryParseResponseMessage(read_span,
                                                             total_readable,
                                                             m_setting.max_message_size,
                                                             m_response);
@@ -189,6 +198,8 @@ private:
     const RpcReaderSetting& m_setting;
     uint32_t m_expected_request_id;
     RpcResponse& m_response;
+    std::array<struct iovec, 2> m_read_iovecs{};
+    size_t m_read_iovec_count = 0;
     std::expected<void, RpcError> m_rpc_result;
     bool m_terminal = false;
 };
