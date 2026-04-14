@@ -173,7 +173,8 @@ int main(int argc, char* argv[]) {
 
     Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(1).build();
     runtime.start();
-    runtime.getNextIOScheduler()->spawn(runStreamClient(host, port, frame_count, payload_size));
+    (void)scheduleTask(runtime.getNextIOScheduler(),
+                       runStreamClient(host, port, frame_count, payload_size));
 
     std::this_thread::sleep_for(std::chrono::seconds(5));
     runtime.stop();

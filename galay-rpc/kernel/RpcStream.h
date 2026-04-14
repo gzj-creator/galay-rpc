@@ -202,65 +202,24 @@ private:
 template<typename SocketType> class StreamReaderImpl;
 template<typename SocketType> class StreamWriterImpl;
 
-/**
- * @brief 流数据发送等待体
- */
-template<typename SocketType>
-class SendStreamDataAwaitable
-    : public ResumableWriteAwaitable<SendStreamDataAwaitable<SocketType>, SocketType>
+namespace detail {
+
+class StreamMessageReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
-    using Base = ResumableWriteAwaitable<SendStreamDataAwaitable<SocketType>, SocketType>;
 public:
-    SendStreamDataAwaitable(SocketType& socket, std::vector<char>&& data)
-        : Base(socket)
-        , m_data(std::move(data))
+    StreamMessageReadState(RingBuffer& ring_buffer, StreamMessage& message)
+        : RpcRingBufferReadStateBase<RpcAwaitableResult>(ring_buffer)
+        , m_message(&message)
     {
-        this->m_total_bytes = m_data.size();
-        if (this->m_total_bytes > 0) {
-            this->m_iovecs.push_back(iovec{m_data.data(), this->m_total_bytes});
-        }
     }
 
-    bool await_ready() const noexcept { return m_data.empty(); }
-
-    std::expected<bool, RpcError> await_resume() {
-        if (m_data.empty()) {
-            return true;
-        }
-        return Base::await_resume();
-    }
-
-private:
-    std::vector<char> m_data;
-};
-
-/**
- * @brief 流消息接收等待体
- */
-template<typename SocketType>
-class GetStreamMessageAwaitable
-    : public RingBufferReadAwaitable<GetStreamMessageAwaitable<SocketType>, SocketType>
-{
-    using Base = RingBufferReadAwaitable<GetStreamMessageAwaitable<SocketType>, SocketType>;
-    friend Base;
-
-public:
-    GetStreamMessageAwaitable(RingBuffer& ring_buffer, SocketType& socket, StreamMessage& msg)
-        : Base(ring_buffer, socket)
-        , m_message(msg)
-        , m_state(State::ReadHeader)
-        , m_body_length(0)
-    {}
-
-private:
-    enum class State { ReadHeader, ReadBody };
-
-    std::expected<bool, RpcError> parseFromRingBuffer() {
-        auto& rb = this->ringBuffer();
+    bool parseFromRingBuffer()
+    {
+        auto& rb = ringBuffer();
         std::array<struct iovec, 2> read_iovecs_storage{};
         size_t read_iovecs_count = rb.getReadIovecs(read_iovecs_storage);
         std::span<const struct iovec> read_iovecs(read_iovecs_storage.data(), read_iovecs_count);
-        size_t total_readable = detail::iovecsReadableBytes(read_iovecs);
+        size_t total_readable = iovecsReadableBytes(read_iovecs);
 
         if (m_state == State::ReadHeader) {
             if (total_readable < RPC_HEADER_SIZE) {
@@ -268,21 +227,22 @@ private:
             }
 
             char header_buf[RPC_HEADER_SIZE];
-            detail::copyFromIovecs(read_iovecs, 0, header_buf, RPC_HEADER_SIZE);
+            copyFromIovecs(read_iovecs, 0, header_buf, RPC_HEADER_SIZE);
 
             if (!m_header.deserialize(header_buf)) {
-                return std::unexpected(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
+                setReadError(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
+                return true;
             }
 
             rb.consume(RPC_HEADER_SIZE);
             m_body_length = m_header.m_body_length;
-            m_message.streamId(m_header.m_request_id);
+            m_message->streamId(m_header.m_request_id);
 
             auto msg_type = static_cast<RpcMessageType>(m_header.m_type);
-            m_message.messageType(msg_type);
+            m_message->messageType(msg_type);
 
             if (msg_type == RpcMessageType::STREAM_END || msg_type == RpcMessageType::STREAM_CANCEL) {
-                m_message.setEnd(true);
+                m_message->setEnd(true);
                 m_state = State::ReadHeader;
                 return true;
             }
@@ -298,14 +258,14 @@ private:
         if (m_state == State::ReadBody) {
             read_iovecs_count = rb.getReadIovecs(read_iovecs_storage);
             read_iovecs = std::span<const struct iovec>(read_iovecs_storage.data(), read_iovecs_count);
-            if (detail::iovecsReadableBytes(read_iovecs) < m_body_length) {
+            if (iovecsReadableBytes(read_iovecs) < m_body_length) {
                 return false;
             }
 
             std::vector<char> body(m_body_length);
-            detail::copyFromIovecs(read_iovecs, 0, body.data(), m_body_length);
+            copyFromIovecs(read_iovecs, 0, body.data(), m_body_length);
 
-            m_message.deserializeBody(body.data(), body.size());
+            m_message->deserializeBody(body.data(), body.size());
             rb.consume(m_body_length);
             m_state = State::ReadHeader;
             return true;
@@ -314,10 +274,98 @@ private:
         return false;
     }
 
-    StreamMessage& m_message;
-    State m_state;
+private:
+    enum class State {
+        ReadHeader,
+        ReadBody
+    };
+
+    StreamMessage* m_message = nullptr;
+    State m_state = State::ReadHeader;
     RpcHeader m_header;
-    size_t m_body_length;
+    size_t m_body_length = 0;
+};
+
+}  // namespace detail
+
+/**
+ * @brief 流数据发送等待体
+ */
+template<typename SocketType>
+class SendStreamDataAwaitable : public TimeoutSupport<SendStreamDataAwaitable<SocketType>>
+{
+public:
+    using Result = detail::RpcAwaitableResult;
+
+    SendStreamDataAwaitable(SocketType& socket, std::vector<char>&& data)
+        : m_state(std::make_shared<detail::RpcVectorWriteState>(std::move(data)))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcWritevMachine<detail::RpcVectorWriteState>(m_state))
+                .build())
+    {}
+
+    SendStreamDataAwaitable(SendStreamDataAwaitable&&) noexcept = default;
+    SendStreamDataAwaitable& operator=(SendStreamDataAwaitable&&) noexcept = default;
+    SendStreamDataAwaitable(const SendStreamDataAwaitable&) = delete;
+    SendStreamDataAwaitable& operator=(const SendStreamDataAwaitable&) = delete;
+
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        return m_inner.await_suspend(handle);
+    }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
+
+private:
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcVectorWriteState>>;
+
+    std::shared_ptr<detail::RpcVectorWriteState> m_state;
+    InnerAwaitable m_inner;
+};
+
+/**
+ * @brief 流消息接收等待体
+ */
+template<typename SocketType>
+class GetStreamMessageAwaitable : public TimeoutSupport<GetStreamMessageAwaitable<SocketType>>
+{
+public:
+    using Result = detail::RpcAwaitableResult;
+
+    GetStreamMessageAwaitable(RingBuffer& ring_buffer, SocketType& socket, StreamMessage& msg)
+        : m_state(std::make_shared<detail::StreamMessageReadState>(ring_buffer, msg))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcRingBufferReadMachine<detail::StreamMessageReadState>(m_state))
+                .build())
+    {}
+
+    GetStreamMessageAwaitable(GetStreamMessageAwaitable&&) noexcept = default;
+    GetStreamMessageAwaitable& operator=(GetStreamMessageAwaitable&&) noexcept = default;
+    GetStreamMessageAwaitable(const GetStreamMessageAwaitable&) = delete;
+    GetStreamMessageAwaitable& operator=(const GetStreamMessageAwaitable&) = delete;
+
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        return m_inner.await_suspend(handle);
+    }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
+
+private:
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::StreamMessageReadState>>;
+
+    std::shared_ptr<detail::StreamMessageReadState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**

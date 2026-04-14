@@ -15,18 +15,24 @@
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/common/Buffer.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <expected>
+#include <memory>
+#include <optional>
 #include <span>
+#include <vector>
 
 namespace galay::rpc
 {
 
 using namespace galay::kernel;
 using namespace galay::async;
+
+using Coroutine = Task<void>;
 
 // 前向声明
 template<typename SocketType> class RpcConnImpl;
@@ -276,349 +282,570 @@ struct RpcWriterSetting {
 /**
  * @brief RPC请求读取等待体（使用readv）
  */
-template<typename SocketType>
-class GetRpcRequestAwaitable
-    : public RingBufferReadAwaitable<GetRpcRequestAwaitable<SocketType>, SocketType>
-{
-    using Base = RingBufferReadAwaitable<GetRpcRequestAwaitable<SocketType>, SocketType>;
-    friend Base;
-public:
-    GetRpcRequestAwaitable(RingBuffer& ring_buffer,
-                           const RpcReaderSetting& setting,
-                           RpcRequest& request,
-                           SocketType& socket)
-        : Base(ring_buffer, socket)
-        , m_setting(setting)
-        , m_request(request)
-    {}
+namespace detail {
 
-private:
-    std::expected<bool, RpcError> parseFromRingBuffer() {
-        if (this->ringBuffer().readable() == 0) {
+using RpcAwaitableResult = std::expected<bool, RpcError>;
+
+class RpcRequestReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
+{
+public:
+    RpcRequestReadState(RingBuffer& ring_buffer,
+                        const RpcReaderSetting& setting,
+                        RpcRequest& request)
+        : RpcRingBufferReadStateBase<RpcAwaitableResult>(ring_buffer)
+        , m_setting(&setting)
+        , m_request(&request)
+    {
+    }
+
+    bool parseFromRingBuffer()
+    {
+        if (ringBuffer().readable() == 0) {
             return false;
         }
 
         std::array<struct iovec, 2> read_iovecs{};
-        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
+        const size_t read_iovecs_count = ringBuffer().getReadIovecs(read_iovecs);
         if (read_iovecs_count == 0) {
             return false;
         }
 
         const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
-        const size_t total_readable = detail::iovecsReadableBytes(read_span);
-        auto parse_result = detail::tryParseRequestMessage(read_span,
-                                                           total_readable,
-                                                           m_setting.max_message_size,
-                                                           m_request);
+        auto parse_result = tryParseRequestMessage(read_span,
+                                                   iovecsReadableBytes(read_span),
+                                                   m_setting->max_message_size,
+                                                   *m_request);
         if (!parse_result.has_value()) {
-            return std::unexpected(parse_result.error());
+            setReadError(parse_result.error());
+            return true;
         }
 
         if (parse_result.value() == 0) {
             return false;
         }
 
-        this->ringBuffer().consume(parse_result.value());
+        ringBuffer().consume(parse_result.value());
         return true;
     }
 
 private:
-    const RpcReaderSetting& m_setting;
-    RpcRequest& m_request;
+    const RpcReaderSetting* m_setting = nullptr;
+    RpcRequest* m_request = nullptr;
+};
+
+class RpcResponseReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
+{
+public:
+    RpcResponseReadState(RingBuffer& ring_buffer,
+                         const RpcReaderSetting& setting,
+                         RpcResponse& response)
+        : RpcRingBufferReadStateBase<RpcAwaitableResult>(ring_buffer)
+        , m_setting(&setting)
+        , m_response(&response)
+    {
+    }
+
+    bool parseFromRingBuffer()
+    {
+        if (ringBuffer().readable() == 0) {
+            return false;
+        }
+
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = ringBuffer().getReadIovecs(read_iovecs);
+        if (read_iovecs_count == 0) {
+            return false;
+        }
+
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        auto parse_result = tryParseResponseMessage(read_span,
+                                                    iovecsReadableBytes(read_span),
+                                                    m_setting->max_message_size,
+                                                    *m_response);
+        if (!parse_result.has_value()) {
+            setReadError(parse_result.error());
+            return true;
+        }
+
+        if (parse_result.value() == 0) {
+            return false;
+        }
+
+        ringBuffer().consume(parse_result.value());
+        return true;
+    }
+
+private:
+    const RpcReaderSetting* m_setting = nullptr;
+    RpcResponse* m_response = nullptr;
+};
+
+class RpcHeaderReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
+{
+public:
+    RpcHeaderReadState(RingBuffer& ring_buffer, RpcHeader& header)
+        : RpcRingBufferReadStateBase<RpcAwaitableResult>(ring_buffer)
+        , m_header(&header)
+    {
+    }
+
+    bool parseFromRingBuffer()
+    {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = ringBuffer().getReadIovecs(read_iovecs);
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        if (iovecsReadableBytes(read_span) < RPC_HEADER_SIZE) {
+            return false;
+        }
+
+        char header_buf[RPC_HEADER_SIZE];
+        copyFromIovecs(read_span, 0, header_buf, RPC_HEADER_SIZE);
+
+        if (!m_header->deserialize(header_buf)) {
+            setReadError(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
+            return true;
+        }
+
+        ringBuffer().consume(RPC_HEADER_SIZE);
+        return true;
+    }
+
+private:
+    RpcHeader* m_header = nullptr;
+};
+
+class RpcBodyReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
+{
+public:
+    RpcBodyReadState(RingBuffer& ring_buffer, char* body, size_t body_len)
+        : RpcRingBufferReadStateBase<RpcAwaitableResult>(ring_buffer)
+        , m_body(body)
+        , m_body_len(body_len)
+    {
+    }
+
+    bool parseFromRingBuffer()
+    {
+        std::array<struct iovec, 2> read_iovecs{};
+        const size_t read_iovecs_count = ringBuffer().getReadIovecs(read_iovecs);
+        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
+        if (iovecsReadableBytes(read_span) < m_body_len) {
+            return false;
+        }
+
+        copyFromIovecs(read_span, 0, m_body, m_body_len);
+        ringBuffer().consume(m_body_len);
+        return true;
+    }
+
+private:
+    char* m_body = nullptr;
+    size_t m_body_len = 0;
+};
+
+class RpcRequestWriteState : public RpcWriteStateBase<RpcAwaitableResult>
+{
+public:
+    explicit RpcRequestWriteState(const RpcRequest& request)
+        : m_request(&request)
+    {
+        rebuildIovecs();
+    }
+
+private:
+    void rebuildIovecs()
+    {
+        RpcPayloadView payload_view = m_request->payloadView();
+        const size_t body_size =
+            sizeof(uint16_t) + m_request->serviceName().size() +
+            sizeof(uint16_t) + m_request->methodName().size() +
+            payload_view.size();
+
+        RpcHeader header;
+        header.m_type = static_cast<uint8_t>(RpcMessageType::REQUEST);
+        header.m_flags = rpcEncodeFlags(m_request->callMode(), m_request->endOfStream());
+        header.m_request_id = m_request->requestId();
+        header.m_body_length = static_cast<uint32_t>(body_size);
+        header.serialize(m_header.data());
+
+        m_service_len = rpcHtons(static_cast<uint16_t>(m_request->serviceName().size()));
+        m_method_len = rpcHtons(static_cast<uint16_t>(m_request->methodName().size()));
+
+        auto& iovecs = mutableIovecs();
+        iovecs.clear();
+        iovecs.reserve(6);
+        iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+        iovecs.push_back(iovec{&m_service_len, sizeof(m_service_len)});
+
+        if (!m_request->serviceName().empty()) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(m_request->serviceName().data()),
+                m_request->serviceName().size()
+            });
+        }
+
+        iovecs.push_back(iovec{&m_method_len, sizeof(m_method_len)});
+        if (!m_request->methodName().empty()) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(m_request->methodName().data()),
+                m_request->methodName().size()
+            });
+        }
+
+        if (payload_view.segment1_len > 0) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(payload_view.segment1),
+                payload_view.segment1_len
+            });
+        }
+
+        if (payload_view.segment2_len > 0) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(payload_view.segment2),
+                payload_view.segment2_len
+            });
+        }
+    }
+
+    const RpcRequest* m_request = nullptr;
+    std::array<char, RPC_HEADER_SIZE> m_header{};
+    uint16_t m_service_len = 0;
+    uint16_t m_method_len = 0;
+};
+
+class RpcResponseWriteState : public RpcWriteStateBase<RpcAwaitableResult>
+{
+public:
+    explicit RpcResponseWriteState(const RpcResponse& response)
+        : m_response(&response)
+    {
+        rebuildIovecs();
+    }
+
+private:
+    void rebuildIovecs()
+    {
+        RpcPayloadView payload_view = m_response->payloadView();
+        const size_t body_size = sizeof(uint16_t) + payload_view.size();
+
+        RpcHeader header;
+        header.m_type = static_cast<uint8_t>(RpcMessageType::RESPONSE);
+        header.m_flags = rpcEncodeFlags(m_response->callMode(), m_response->endOfStream());
+        header.m_request_id = m_response->requestId();
+        header.m_body_length = static_cast<uint32_t>(body_size);
+        header.serialize(m_header.data());
+
+        m_error_code = rpcHtons(static_cast<uint16_t>(m_response->errorCode()));
+
+        auto& iovecs = mutableIovecs();
+        iovecs.clear();
+        iovecs.reserve(4);
+        iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+        iovecs.push_back(iovec{&m_error_code, sizeof(m_error_code)});
+
+        if (payload_view.segment1_len > 0) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(payload_view.segment1),
+                payload_view.segment1_len
+            });
+        }
+
+        if (payload_view.segment2_len > 0) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(payload_view.segment2),
+                payload_view.segment2_len
+            });
+        }
+    }
+
+    const RpcResponse* m_response = nullptr;
+    std::array<char, RPC_HEADER_SIZE> m_header{};
+    uint16_t m_error_code = 0;
+};
+
+}  // namespace detail
+
+template<typename SocketType>
+class GetRpcRequestAwaitable : public TimeoutSupport<GetRpcRequestAwaitable<SocketType>>
+{
+public:
+    using Result = detail::RpcAwaitableResult;
+
+    GetRpcRequestAwaitable(RingBuffer& ring_buffer,
+                           const RpcReaderSetting& setting,
+                           RpcRequest& request,
+                           SocketType& socket)
+        : m_state(std::make_shared<detail::RpcRequestReadState>(ring_buffer, setting, request))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcRingBufferReadMachine<detail::RpcRequestReadState>(m_state))
+                .build())
+    {}
+
+    GetRpcRequestAwaitable(GetRpcRequestAwaitable&&) noexcept = default;
+    GetRpcRequestAwaitable& operator=(GetRpcRequestAwaitable&&) noexcept = default;
+    GetRpcRequestAwaitable(const GetRpcRequestAwaitable&) = delete;
+    GetRpcRequestAwaitable& operator=(const GetRpcRequestAwaitable&) = delete;
+
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        return m_inner.await_suspend(handle);
+    }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
+
+private:
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcRequestReadState>>;
+
+    std::shared_ptr<detail::RpcRequestReadState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**
  * @brief RPC响应读取等待体（使用readv）
  */
 template<typename SocketType>
-class GetRpcResponseAwaitable
-    : public RingBufferReadAwaitable<GetRpcResponseAwaitable<SocketType>, SocketType>
+class GetRpcResponseAwaitable : public TimeoutSupport<GetRpcResponseAwaitable<SocketType>>
 {
-    using Base = RingBufferReadAwaitable<GetRpcResponseAwaitable<SocketType>, SocketType>;
-    friend Base;
 public:
+    using Result = detail::RpcAwaitableResult;
+
     GetRpcResponseAwaitable(RingBuffer& ring_buffer,
                             const RpcReaderSetting& setting,
                             RpcResponse& response,
                             SocketType& socket)
-        : Base(ring_buffer, socket)
-        , m_setting(setting)
-        , m_response(response)
+        : m_state(std::make_shared<detail::RpcResponseReadState>(ring_buffer, setting, response))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcRingBufferReadMachine<detail::RpcResponseReadState>(m_state))
+                .build())
     {}
 
-private:
-    std::expected<bool, RpcError> parseFromRingBuffer() {
-        if (this->ringBuffer().readable() == 0) {
-            return false;
-        }
+    GetRpcResponseAwaitable(GetRpcResponseAwaitable&&) noexcept = default;
+    GetRpcResponseAwaitable& operator=(GetRpcResponseAwaitable&&) noexcept = default;
+    GetRpcResponseAwaitable(const GetRpcResponseAwaitable&) = delete;
+    GetRpcResponseAwaitable& operator=(const GetRpcResponseAwaitable&) = delete;
 
-        std::array<struct iovec, 2> read_iovecs{};
-        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
-        if (read_iovecs_count == 0) {
-            return false;
-        }
-
-        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
-        const size_t total_readable = detail::iovecsReadableBytes(read_span);
-        auto parse_result = detail::tryParseResponseMessage(read_span,
-                                                            total_readable,
-                                                            m_setting.max_message_size,
-                                                            m_response);
-        if (!parse_result.has_value()) {
-            return std::unexpected(parse_result.error());
-        }
-
-        if (parse_result.value() == 0) {
-            return false;
-        }
-
-        this->ringBuffer().consume(parse_result.value());
-        return true;
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        return m_inner.await_suspend(handle);
     }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
 
 private:
-    const RpcReaderSetting& m_setting;
-    RpcResponse& m_response;
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcResponseReadState>>;
+
+    std::shared_ptr<detail::RpcResponseReadState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**
  * @brief RPC发送请求等待体（使用writev）
  */
 template<typename SocketType>
-class SendRpcRequestAwaitable
-    : public ResumableWriteAwaitable<SendRpcRequestAwaitable<SocketType>, SocketType>
+class SendRpcRequestAwaitable : public TimeoutSupport<SendRpcRequestAwaitable<SocketType>>
 {
-    using Base = ResumableWriteAwaitable<SendRpcRequestAwaitable<SocketType>, SocketType>;
 public:
+    using Result = detail::RpcAwaitableResult;
+
     SendRpcRequestAwaitable(const RpcRequest& request, SocketType& socket)
-        : Base(socket)
-        , m_request(request)
+        : m_state(std::make_shared<detail::RpcRequestWriteState>(request))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcWritevMachine<detail::RpcRequestWriteState>(m_state))
+                .build())
+    {}
+
+    SendRpcRequestAwaitable(SendRpcRequestAwaitable&&) noexcept = default;
+    SendRpcRequestAwaitable& operator=(SendRpcRequestAwaitable&&) noexcept = default;
+    SendRpcRequestAwaitable(const SendRpcRequestAwaitable&) = delete;
+    SendRpcRequestAwaitable& operator=(const SendRpcRequestAwaitable&) = delete;
+
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
     {
-        rebuildIovecs();
+        return m_inner.await_suspend(handle);
     }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
 
 private:
-    void rebuildIovecs() {
-        RpcPayloadView payload_view = m_request.payloadView();
-        const size_t body_size =
-            sizeof(uint16_t) + m_request.serviceName().size() +
-            sizeof(uint16_t) + m_request.methodName().size() +
-            payload_view.size();
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcRequestWriteState>>;
 
-        RpcHeader header;
-        header.m_type = static_cast<uint8_t>(RpcMessageType::REQUEST);
-        header.m_flags = rpcEncodeFlags(m_request.callMode(), m_request.endOfStream());
-        header.m_request_id = m_request.requestId();
-        header.m_body_length = static_cast<uint32_t>(body_size);
-        header.serialize(m_header.data());
-
-        m_service_len = rpcHtons(static_cast<uint16_t>(m_request.serviceName().size()));
-        m_method_len = rpcHtons(static_cast<uint16_t>(m_request.methodName().size()));
-        this->m_total_bytes = RPC_HEADER_SIZE + body_size;
-
-        this->m_iovecs.clear();
-        this->m_iovecs.reserve(6);
-        this->m_iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
-        this->m_iovecs.push_back(iovec{&m_service_len, sizeof(m_service_len)});
-
-        if (!m_request.serviceName().empty()) {
-            this->m_iovecs.push_back(iovec{
-                const_cast<char*>(m_request.serviceName().data()),
-                m_request.serviceName().size()
-            });
-        }
-
-        this->m_iovecs.push_back(iovec{&m_method_len, sizeof(m_method_len)});
-        if (!m_request.methodName().empty()) {
-            this->m_iovecs.push_back(iovec{
-                const_cast<char*>(m_request.methodName().data()),
-                m_request.methodName().size()
-            });
-        }
-
-        if (payload_view.segment1_len > 0) {
-            this->m_iovecs.push_back(iovec{
-                const_cast<char*>(payload_view.segment1),
-                payload_view.segment1_len
-            });
-        }
-
-        if (payload_view.segment2_len > 0) {
-            this->m_iovecs.push_back(iovec{
-                const_cast<char*>(payload_view.segment2),
-                payload_view.segment2_len
-            });
-        }
-    }
-
-private:
-    const RpcRequest& m_request;
-    std::array<char, RPC_HEADER_SIZE> m_header{};
-    uint16_t m_service_len = 0;
-    uint16_t m_method_len = 0;
+    std::shared_ptr<detail::RpcRequestWriteState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**
  * @brief RPC发送响应等待体（使用writev）
  */
 template<typename SocketType>
-class SendRpcResponseAwaitable
-    : public ResumableWriteAwaitable<SendRpcResponseAwaitable<SocketType>, SocketType>
+class SendRpcResponseAwaitable : public TimeoutSupport<SendRpcResponseAwaitable<SocketType>>
 {
-    using Base = ResumableWriteAwaitable<SendRpcResponseAwaitable<SocketType>, SocketType>;
 public:
+    using Result = detail::RpcAwaitableResult;
+
     SendRpcResponseAwaitable(const RpcResponse& response, SocketType& socket)
-        : Base(socket)
-        , m_response(response)
+        : m_state(std::make_shared<detail::RpcResponseWriteState>(response))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcWritevMachine<detail::RpcResponseWriteState>(m_state))
+                .build())
+    {}
+
+    SendRpcResponseAwaitable(SendRpcResponseAwaitable&&) noexcept = default;
+    SendRpcResponseAwaitable& operator=(SendRpcResponseAwaitable&&) noexcept = default;
+    SendRpcResponseAwaitable(const SendRpcResponseAwaitable&) = delete;
+    SendRpcResponseAwaitable& operator=(const SendRpcResponseAwaitable&) = delete;
+
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
     {
-        rebuildIovecs();
+        return m_inner.await_suspend(handle);
     }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
 
 private:
-    void rebuildIovecs() {
-        RpcPayloadView payload_view = m_response.payloadView();
-        const size_t body_size = sizeof(uint16_t) + payload_view.size();
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcResponseWriteState>>;
 
-        RpcHeader header;
-        header.m_type = static_cast<uint8_t>(RpcMessageType::RESPONSE);
-        header.m_flags = rpcEncodeFlags(m_response.callMode(), m_response.endOfStream());
-        header.m_request_id = m_response.requestId();
-        header.m_body_length = static_cast<uint32_t>(body_size);
-        header.serialize(m_header.data());
-
-        m_error_code = rpcHtons(static_cast<uint16_t>(m_response.errorCode()));
-        this->m_total_bytes = RPC_HEADER_SIZE + body_size;
-
-        this->m_iovecs.clear();
-        this->m_iovecs.reserve(3);
-        this->m_iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
-        this->m_iovecs.push_back(iovec{&m_error_code, sizeof(m_error_code)});
-
-        if (payload_view.segment1_len > 0) {
-            this->m_iovecs.push_back(iovec{
-                const_cast<char*>(payload_view.segment1),
-                payload_view.segment1_len
-            });
-        }
-
-        if (payload_view.segment2_len > 0) {
-            this->m_iovecs.push_back(iovec{
-                const_cast<char*>(payload_view.segment2),
-                payload_view.segment2_len
-            });
-        }
-    }
-
-private:
-    const RpcResponse& m_response;
-    std::array<char, RPC_HEADER_SIZE> m_header{};
-    uint16_t m_error_code = 0;
+    std::shared_ptr<detail::RpcResponseWriteState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**
  * @brief 发送原始数据等待体（用于流式传输）
  */
 template<typename SocketType>
-class SendRawDataAwaitable
-    : public ResumableWriteAwaitable<SendRawDataAwaitable<SocketType>, SocketType>
+class SendRawDataAwaitable : public TimeoutSupport<SendRawDataAwaitable<SocketType>>
 {
-    using Base = ResumableWriteAwaitable<SendRawDataAwaitable<SocketType>, SocketType>;
 public:
+    using Result = detail::RpcAwaitableResult;
+
     SendRawDataAwaitable(std::vector<char>&& data, SocketType& socket)
-        : Base(socket)
-        , m_data(std::move(data))
+        : m_state(std::make_shared<detail::RpcVectorWriteState>(std::move(data)))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcWritevMachine<detail::RpcVectorWriteState>(m_state))
+                .build())
+    {}
+
+    SendRawDataAwaitable(SendRawDataAwaitable&&) noexcept = default;
+    SendRawDataAwaitable& operator=(SendRawDataAwaitable&&) noexcept = default;
+    SendRawDataAwaitable(const SendRawDataAwaitable&) = delete;
+    SendRawDataAwaitable& operator=(const SendRawDataAwaitable&) = delete;
+
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
     {
-        this->m_total_bytes = m_data.size();
-        if (this->m_total_bytes > 0) {
-            this->m_iovecs.push_back(iovec{m_data.data(), this->m_total_bytes});
-        }
+        return m_inner.await_suspend(handle);
     }
-
-    bool await_ready() const noexcept { return m_data.empty(); }
-
-    std::expected<bool, RpcError> await_resume() {
-        if (m_data.empty()) {
-            return true;
-        }
-        return Base::await_resume();
-    }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
 
 private:
-    std::vector<char> m_data;
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcVectorWriteState>>;
+
+    std::shared_ptr<detail::RpcVectorWriteState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**
  * @brief 读取消息头等待体（用于流式传输）
  */
 template<typename SocketType>
-class GetRpcHeaderAwaitable
-    : public RingBufferReadAwaitable<GetRpcHeaderAwaitable<SocketType>, SocketType>
+class GetRpcHeaderAwaitable : public TimeoutSupport<GetRpcHeaderAwaitable<SocketType>>
 {
-    using Base = RingBufferReadAwaitable<GetRpcHeaderAwaitable<SocketType>, SocketType>;
-    friend Base;
 public:
+    using Result = detail::RpcAwaitableResult;
+
     GetRpcHeaderAwaitable(RingBuffer& ring_buffer, RpcHeader& header, SocketType& socket)
-        : Base(ring_buffer, socket)
-        , m_header(header)
+        : m_state(std::make_shared<detail::RpcHeaderReadState>(ring_buffer, header))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcRingBufferReadMachine<detail::RpcHeaderReadState>(m_state))
+                .build())
     {}
 
-private:
-    std::expected<bool, RpcError> parseFromRingBuffer() {
-        std::array<struct iovec, 2> read_iovecs{};
-        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
-        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
-        if (detail::iovecsReadableBytes(read_span) < RPC_HEADER_SIZE) {
-            return false;
-        }
+    GetRpcHeaderAwaitable(GetRpcHeaderAwaitable&&) noexcept = default;
+    GetRpcHeaderAwaitable& operator=(GetRpcHeaderAwaitable&&) noexcept = default;
+    GetRpcHeaderAwaitable(const GetRpcHeaderAwaitable&) = delete;
+    GetRpcHeaderAwaitable& operator=(const GetRpcHeaderAwaitable&) = delete;
 
-        char header_buf[RPC_HEADER_SIZE];
-        detail::copyFromIovecs(read_span, 0, header_buf, RPC_HEADER_SIZE);
-
-        if (!m_header.deserialize(header_buf)) {
-            return std::unexpected(RpcError(RpcErrorCode::INVALID_REQUEST, "Invalid header"));
-        }
-
-        this->ringBuffer().consume(RPC_HEADER_SIZE);
-        return true;
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        return m_inner.await_suspend(handle);
     }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
 
 private:
-    RpcHeader& m_header;
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcHeaderReadState>>;
+
+    std::shared_ptr<detail::RpcHeaderReadState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**
  * @brief 读取消息体等待体（用于流式传输）
  */
 template<typename SocketType>
-class GetRpcBodyAwaitable
-    : public RingBufferReadAwaitable<GetRpcBodyAwaitable<SocketType>, SocketType>
+class GetRpcBodyAwaitable : public TimeoutSupport<GetRpcBodyAwaitable<SocketType>>
 {
-    using Base = RingBufferReadAwaitable<GetRpcBodyAwaitable<SocketType>, SocketType>;
-    friend Base;
 public:
+    using Result = detail::RpcAwaitableResult;
+
     GetRpcBodyAwaitable(RingBuffer& ring_buffer, char* body, size_t body_len, SocketType& socket)
-        : Base(ring_buffer, socket)
-        , m_body(body)
-        , m_body_len(body_len)
+        : m_state(std::make_shared<detail::RpcBodyReadState>(ring_buffer, body, body_len))
+        , m_inner(
+            AwaitableBuilder<Result>::fromStateMachine(
+                socket.controller(),
+                detail::RpcRingBufferReadMachine<detail::RpcBodyReadState>(m_state))
+                .build())
     {}
 
-private:
-    std::expected<bool, RpcError> parseFromRingBuffer() {
-        std::array<struct iovec, 2> read_iovecs{};
-        const size_t read_iovecs_count = this->ringBuffer().getReadIovecs(read_iovecs);
-        const std::span<const iovec> read_span(read_iovecs.data(), read_iovecs_count);
-        if (detail::iovecsReadableBytes(read_span) < m_body_len) {
-            return false;
-        }
+    GetRpcBodyAwaitable(GetRpcBodyAwaitable&&) noexcept = default;
+    GetRpcBodyAwaitable& operator=(GetRpcBodyAwaitable&&) noexcept = default;
+    GetRpcBodyAwaitable(const GetRpcBodyAwaitable&) = delete;
+    GetRpcBodyAwaitable& operator=(const GetRpcBodyAwaitable&) = delete;
 
-        detail::copyFromIovecs(read_span, 0, m_body, m_body_len);
-        this->ringBuffer().consume(m_body_len);
-        return true;
+    bool await_ready() { return m_inner.await_ready(); }
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle)
+    {
+        return m_inner.await_suspend(handle);
     }
+    Result await_resume() { return m_inner.await_resume(); }
+    void markTimeout() { m_inner.markTimeout(); }
 
 private:
-    char* m_body;
-    size_t m_body_len;
+    using InnerAwaitable =
+        StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcBodyReadState>>;
+
+    std::shared_ptr<detail::RpcBodyReadState> m_state;
+    InnerAwaitable m_inner;
 };
 
 /**

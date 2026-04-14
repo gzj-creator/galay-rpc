@@ -29,7 +29,6 @@
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcError.h"
 #include "RpcStream.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include <array>
 #include <string>
 #include <unordered_map>
@@ -44,8 +43,8 @@ class RpcContext;
 /**
  * @brief RPC方法处理函数类型
  */
-using RpcMethodHandler = std::function<kernel::Coroutine(RpcContext&)>;
-using RpcStreamHandler = std::function<kernel::Coroutine(RpcStream&)>;
+using RpcMethodHandler = std::function<Coroutine(RpcContext&)>;
+using RpcStreamHandler = std::function<Coroutine(RpcStream&)>;
 
 /**
  * @brief RPC服务基类
@@ -144,7 +143,7 @@ protected:
      * @param method 成员函数指针
      */
     template<typename T>
-    void registerMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcContext&)) {
+    void registerMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerUnaryMethod(name, method);
     }
 
@@ -165,22 +164,22 @@ protected:
     }
 
     template<typename T>
-    void registerUnaryMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcContext&)) {
+    void registerUnaryMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::UNARY, method);
     }
 
     template<typename T>
-    void registerClientStreamingMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcContext&)) {
+    void registerClientStreamingMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::CLIENT_STREAMING, method);
     }
 
     template<typename T>
-    void registerServerStreamingMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcContext&)) {
+    void registerServerStreamingMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::SERVER_STREAMING, method);
     }
 
     template<typename T>
-    void registerBidiStreamingMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcContext&)) {
+    void registerBidiStreamingMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::BIDI_STREAMING, method);
     }
 
@@ -189,9 +188,9 @@ protected:
     }
 
     template<typename T>
-    void registerStreamMethod(std::string_view name, kernel::Coroutine (T::*method)(RpcStream&)) {
+    void registerStreamMethod(std::string_view name, Coroutine (T::*method)(RpcStream&)) {
         m_stream_session_methods[std::string(name)] =
-            [this, method](RpcStream& stream) -> kernel::Coroutine {
+            [this, method](RpcStream& stream) -> Coroutine {
                 return (static_cast<T*>(this)->*method)(stream);
             };
     }
@@ -231,10 +230,10 @@ private:
     template<typename T>
     void registerMemberMethod(std::string_view name,
                               RpcCallMode mode,
-                              kernel::Coroutine (T::*method)(RpcContext&)) {
+                              Coroutine (T::*method)(RpcContext&)) {
         registerMethodByMode(name,
                              mode,
-                             [this, method](RpcContext& ctx) -> kernel::Coroutine {
+                             [this, method](RpcContext& ctx) -> Coroutine {
                                  return (static_cast<T*>(this)->*method)(ctx);
                              });
     }

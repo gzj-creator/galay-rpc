@@ -6,6 +6,7 @@
 #include "test_result_writer.h"
 #include "galay-rpc/kernel/RpcClient.h"
 #include "galay-kernel/kernel/Runtime.h"
+#include <atomic>
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -136,16 +137,18 @@ Coroutine testMethodNotFound(RpcClient& client) {
     co_return;
 }
 
-Coroutine runAllTests(Runtime& runtime, const std::string& host, uint16_t port) {
+Coroutine runAllTests(const std::string& host, uint16_t port, std::atomic<bool>* done) {
     RpcClient client;
 
     auto connect_result = co_await client.connect(host, port);
 
     if (!connect_result) {
-        std::cerr << "Failed to connect to server\n";
+        std::cerr << "Failed to connect to server: "
+                  << connect_result.error().message() << "\n";
         if (g_writer) {
-            g_writer->writeTestCase("Connect to server", false, "Connection failed");
+            g_writer->writeTestCase("Connect to server", false, connect_result.error().message());
         }
+        done->store(true, std::memory_order_release);
         co_return;
     }
 
@@ -155,14 +158,15 @@ Coroutine runAllTests(Runtime& runtime, const std::string& host, uint16_t port) 
 
     std::cout << "Connected to server, running tests...\n";
 
-    co_await testEchoCall(client).wait();
-    co_await testUppercaseCall(client).wait();
-    co_await testAddCall(client).wait();
-    co_await testServiceNotFound(client).wait();
-    co_await testMethodNotFound(client).wait();
+    co_await testEchoCall(client);
+    co_await testUppercaseCall(client);
+    co_await testAddCall(client);
+    co_await testServiceNotFound(client);
+    co_await testMethodNotFound(client);
 
     co_await client.close();
     std::cout << "Tests completed.\n";
+    done->store(true, std::memory_order_release);
     co_return;
 }
 
@@ -185,11 +189,18 @@ int main(int argc, char* argv[]) {
     Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(1).build();
     runtime.start();
 
+    std::atomic<bool> done{false};
     auto* scheduler = runtime.getNextIOScheduler();
-    scheduler->spawn(runAllTests(runtime, host, port));
-
-    // 等待测试完成
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    if (!scheduleTask(scheduler, runAllTests(host, port, &done))) {
+        writer.writeTestCase("Schedule test task", false, "Failed to schedule task on IO scheduler");
+    } else {
+        for (int i = 0; i < 50 && !done.load(std::memory_order_acquire); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (!done.load(std::memory_order_acquire)) {
+            writer.writeTestCase("Test completion", false, "Timed out waiting for test task");
+        }
+    }
 
     runtime.stop();
 

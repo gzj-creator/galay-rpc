@@ -6,7 +6,14 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 # 构建目标选项
-option(BUILD_TESTS "Build test executables" ON)
+# BUILD_TESTS 兼容别名：向 BUILD_TESTING 迁移
+if(DEFINED BUILD_TESTS)
+    message(DEPRECATION "BUILD_TESTS is deprecated; use BUILD_TESTING instead.")
+    set(BUILD_TESTING "${BUILD_TESTS}" CACHE BOOL "Build test executables" FORCE)
+endif()
+set(BUILD_TESTS "${BUILD_TESTING}" CACHE BOOL "Deprecated alias of BUILD_TESTING" FORCE)
+mark_as_advanced(BUILD_TESTS)
+
 option(BUILD_BENCHMARKS "Build benchmark executables" ON)
 option(BUILD_EXAMPLES "Build example executables" ON)
 option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) examples" ON)

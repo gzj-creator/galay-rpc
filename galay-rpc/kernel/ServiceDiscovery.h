@@ -13,7 +13,6 @@
 
 #include "RpcService.h"
 #include "galay-kernel/concurrency/AsyncMutex.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/AsyncStrategy.hpp"
 #include <string>
 #include <vector>
@@ -222,19 +221,19 @@ concept AsyncServiceRegistry = requires(T registry,
                                         const ServiceEndpoint& endpoint,
                                         ServiceWatchCallback callback) {
     // 异步注册服务
-    { registry.registerServiceAsync(endpoint) } -> std::same_as<kernel::Coroutine>;
+    { registry.registerServiceAsync(endpoint) } -> std::same_as<Coroutine>;
 
     // 异步注销服务
-    { registry.deregisterServiceAsync(endpoint) } -> std::same_as<kernel::Coroutine>;
+    { registry.deregisterServiceAsync(endpoint) } -> std::same_as<Coroutine>;
 
     // 异步发现服务
-    { registry.discoverServiceAsync(service_name) } -> std::same_as<kernel::Coroutine>;
+    { registry.discoverServiceAsync(service_name) } -> std::same_as<Coroutine>;
 
     // 异步监听服务变更
-    { registry.watchServiceAsync(service_name, callback) } -> std::same_as<kernel::Coroutine>;
+    { registry.watchServiceAsync(service_name, callback) } -> std::same_as<Coroutine>;
 
     // 异步取消监听
-    { registry.unwatchServiceAsync(service_name) } -> std::same_as<kernel::Coroutine>;
+    { registry.unwatchServiceAsync(service_name) } -> std::same_as<Coroutine>;
 
     // 获取最后一次操作的结果
     { registry.lastError() } -> std::same_as<DiscoveryError>;
@@ -255,7 +254,7 @@ public:
     /**
      * @brief 异步注册服务
      */
-    kernel::Coroutine registerServiceAsync(const ServiceEndpoint& endpoint) {
+    Coroutine registerServiceAsync(const ServiceEndpoint& endpoint) {
         auto lock_result = co_await m_mutex.lock();
         if (!lock_result) {
             m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
@@ -280,7 +279,7 @@ public:
     /**
      * @brief 异步注销服务
      */
-    kernel::Coroutine deregisterServiceAsync(const ServiceEndpoint& endpoint) {
+    Coroutine deregisterServiceAsync(const ServiceEndpoint& endpoint) {
         auto lock_result = co_await m_mutex.lock();
         if (!lock_result) {
             m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
@@ -325,7 +324,7 @@ public:
     /**
      * @brief 异步发现服务
      */
-    kernel::Coroutine discoverServiceAsync(const std::string& service_name) {
+    Coroutine discoverServiceAsync(const std::string& service_name) {
         auto lock_result = co_await m_mutex.lock();
         if (!lock_result) {
             m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
@@ -348,7 +347,7 @@ public:
     /**
      * @brief 异步监听服务变更
      */
-    kernel::Coroutine watchServiceAsync(const std::string& service_name, ServiceWatchCallback callback) {
+    Coroutine watchServiceAsync(const std::string& service_name, ServiceWatchCallback callback) {
         auto lock_result = co_await m_mutex.lock();
         if (!lock_result) {
             m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");
@@ -364,7 +363,7 @@ public:
     /**
      * @brief 异步取消监听
      */
-    kernel::Coroutine unwatchServiceAsync(const std::string& service_name) {
+    Coroutine unwatchServiceAsync(const std::string& service_name) {
         auto lock_result = co_await m_mutex.lock();
         if (!lock_result) {
             m_last_error = DiscoveryError(DiscoveryError::LOCK_TIMEOUT, "Lock timeout");

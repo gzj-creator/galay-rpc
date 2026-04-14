@@ -26,6 +26,7 @@
 
 #include "RpcService.h"
 #include "RpcConn.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include <array>
@@ -105,7 +106,7 @@ public:
     explicit RpcServer(const RpcServerConfig& config)
         : m_config(config)
         , m_runtime(RuntimeBuilder()
-                        .ioSchedulerCount(config.io_scheduler_count)
+                        .ioSchedulerCount(resolveIoSchedulerCount(config.io_scheduler_count))
                         .computeSchedulerCount(config.compute_scheduler_count)
                         .applyAffinity(config.affinity)
                         .build()) {}
@@ -130,7 +131,11 @@ public:
         m_runtime.start();
 
         auto* scheduler = m_runtime.getNextIOScheduler();
-        scheduler->spawn(acceptLoop());
+        if (!scheduleTask(scheduler, acceptLoop())) {
+            m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule accept loop");
+            m_running.store(false, std::memory_order_release);
+            m_runtime.stop();
+        }
     }
 
     /**
@@ -330,7 +335,15 @@ private:
 
             // 分发到下一个IO调度器处理
             auto* scheduler = m_runtime.getNextIOScheduler();
-            scheduler->spawn(handleConnection(accept_result.value()));
+            if (!scheduleTask(scheduler, handleConnection(accept_result.value()))) {
+                m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule connection handler");
+                GHandle accepted = accept_result.value();
+                RpcConn conn(accepted, RpcReaderSetting{}, RpcWriterSetting{}, m_config.ring_buffer_size);
+                auto close_result = co_await conn.close();
+                if (!close_result) {
+                    m_last_error = RpcError::from(close_result.error());
+                }
+            }
         }
 
         auto close_result = co_await listener.close();
@@ -398,7 +411,7 @@ private:
 
             if (handler != nullptr) {
                 RpcContext ctx(request, response);
-                co_await (*handler)(ctx).wait();
+                co_await (*handler)(ctx);
             }
 
             // 发送响应（co_await直到完整发送）

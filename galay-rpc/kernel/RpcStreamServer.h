@@ -13,6 +13,7 @@
 
 #include "RpcService.h"
 #include "RpcStream.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <atomic>
@@ -89,7 +90,7 @@ public:
     explicit RpcStreamServer(const RpcStreamServerConfig& config)
         : m_config(config)
         , m_runtime(RuntimeBuilder()
-                        .ioSchedulerCount(config.io_scheduler_count)
+                        .ioSchedulerCount(resolveIoSchedulerCount(config.io_scheduler_count))
                         .computeSchedulerCount(config.compute_scheduler_count)
                         .applyAffinity(config.affinity)
                         .build()) {}
@@ -105,7 +106,12 @@ public:
     void start() {
         m_running.store(true, std::memory_order_release);
         m_runtime.start();
-        m_runtime.getNextIOScheduler()->spawn(acceptLoop());
+        auto* scheduler = m_runtime.getNextIOScheduler();
+        if (!scheduleTask(scheduler, acceptLoop())) {
+            m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule stream accept loop");
+            m_running.store(false, std::memory_order_release);
+            m_runtime.stop();
+        }
     }
 
     void stop() {
@@ -176,7 +182,15 @@ private:
                 continue;
             }
 
-            m_runtime.getNextIOScheduler()->spawn(handleConnection(accept_result.value()));
+            auto* scheduler = m_runtime.getNextIOScheduler();
+            if (!scheduleTask(scheduler, handleConnection(accept_result.value()))) {
+                m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule stream connection handler");
+                TcpSocket socket(accept_result.value());
+                auto close_result = co_await socket.close();
+                if (!close_result) {
+                    m_last_error = RpcError::from(close_result.error());
+                }
+            }
         }
 
         auto close_result = co_await listener.close();
@@ -275,7 +289,7 @@ private:
             }
 
             auto* handler = handler_result.value();
-            co_await (*handler)(stream).wait();
+            co_await (*handler)(stream);
         }
 
         auto close_result = co_await socket.close();

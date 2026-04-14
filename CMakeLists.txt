@@ -7,10 +7,22 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 构建选项 / 平台选项
+include(CTest)
 include(cmake/option.cmake)
 
 # 配置 IO 后端
 configure_io_backend()
+
+# 优先使用 sibling 仓库下的本地安装前缀，避免误命中 /usr/local 旧包。
+set(GALAY_RPC_SIBLING_KERNEL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/../galay-kernel/install-local")
+set(GALAY_RPC_SIBLING_KERNEL_CONFIG_DIR "${GALAY_RPC_SIBLING_KERNEL_PREFIX}/lib/cmake/galay-kernel")
+if(EXISTS "${GALAY_RPC_SIBLING_KERNEL_CONFIG_DIR}/galay-kernel-config.cmake")
+    list(PREPEND CMAKE_PREFIX_PATH "${GALAY_RPC_SIBLING_KERNEL_PREFIX}")
+    if(NOT DEFINED galay-kernel_DIR OR galay-kernel_DIR STREQUAL "")
+        set(galay-kernel_DIR "${GALAY_RPC_SIBLING_KERNEL_CONFIG_DIR}" CACHE PATH
+            "Preferred galay-kernel package config directory" FORCE)
+    endif()
+endif()
 
 # 查找依赖
 find_package(galay-kernel REQUIRED)
@@ -88,8 +100,7 @@ if(BUILD_MODULE_EXAMPLES AND GALAY_RPC_MODULES_SUPPORTED AND GALAY_RPC_MODULES_G
 endif()
 
 # 测试
-if(BUILD_TESTS)
-    enable_testing()
+if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
 

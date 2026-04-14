@@ -93,7 +93,7 @@ Coroutine runClient(Runtime& runtime, const std::string& host, uint16_t port) {
                               payload,
                               [&]() {
                                   return client.call("EchoService", "echo", payload);
-                              }).wait();
+                              });
 
     co_await callEchoWithMode("Client Streaming Echo (single frame)",
                               RpcCallMode::CLIENT_STREAMING,
@@ -104,7 +104,7 @@ Coroutine runClient(Runtime& runtime, const std::string& host, uint16_t port) {
                                                                       payload.data(),
                                                                       payload.size(),
                                                                       true);
-                              }).wait();
+                              });
 
     co_await callEchoWithMode("Server Streaming Echo (single response frame)",
                               RpcCallMode::SERVER_STREAMING,
@@ -114,7 +114,7 @@ Coroutine runClient(Runtime& runtime, const std::string& host, uint16_t port) {
                                                                         "echo",
                                                                         payload.data(),
                                                                         payload.size());
-                              }).wait();
+                              });
 
     co_await callEchoWithMode("Bidi Streaming Echo (single frame)",
                               RpcCallMode::BIDI_STREAMING,
@@ -125,7 +125,7 @@ Coroutine runClient(Runtime& runtime, const std::string& host, uint16_t port) {
                                                                     payload.data(),
                                                                     payload.size(),
                                                                     true);
-                              }).wait();
+                              });
 
     co_await client.close();
     std::cout << "Client closed.\n";
@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
     runtime.start();
 
     auto* scheduler = runtime.getNextIOScheduler();
-    scheduler->spawn(runClient(runtime, host, port));
+    (void)scheduleTask(scheduler, runClient(runtime, host, port));
 
     std::this_thread::sleep_for(std::chrono::seconds(4));
 

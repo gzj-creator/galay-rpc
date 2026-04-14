@@ -1,11 +1,12 @@
 /**
  * @file RpcAwaitableBase.h
- * @brief RPC等待体CRTP基类
+ * @brief RPC builder/state-machine awaitable 辅助骨架
  * @author galay-rpc
  * @version 1.0.0
  *
- * @details 提供读/写等待体的公共骨架，消除重复代码。
- *          Derived类只需实现特定的解析/构建逻辑。
+ * @details 为 RPC 仓库内的读写 facade 提供共享的 state-machine helper，
+ *          让上层 awaitable 通过 `AwaitableBuilder::fromStateMachine(...)`
+ *          暴露，而不是继续继承手写 IO awaitable。
  */
 
 #ifndef GALAY_RPC_AWAITABLE_BASE_H
@@ -14,9 +15,12 @@
 #include "galay-rpc/protoc/RpcError.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/common/Buffer.h"
+
 #include <array>
 #include <expected>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace galay::rpc
@@ -26,12 +30,8 @@ using namespace galay::kernel;
 
 namespace detail {
 
-inline std::array<struct iovec, 1>& emptyIovecs() {
-    static std::array<struct iovec, 1> empty{};
-    return empty;
-}
-
-inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed) {
+inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed)
+{
     if (consumed == 0 || iovecs.empty()) {
         return;
     }
@@ -59,210 +59,276 @@ inline void consumeWritevIovecs(std::vector<iovec>& iovecs, size_t consumed) {
     }
 }
 
-} // namespace detail
+inline bool prepareRingBufferReadWindow(RingBuffer& ring_buffer,
+                                        std::array<struct iovec, 2>& read_iovecs,
+                                        size_t& read_iov_count)
+{
+    read_iov_count = ring_buffer.getWriteIovecs(read_iovecs);
+    size_t writable = 0;
+    for (size_t i = 0; i < read_iov_count; ++i) {
+        writable += read_iovecs[i].iov_len;
+    }
+    return writable > 0;
+}
 
-/**
- * @brief 基于RingBuffer的读等待体CRTP基类
- *
- * @details Derived必须实现:
- *   - std::expected<bool, RpcError> parseFromRingBuffer()
- *     返回 true=解析完成, false=数据不足, unexpected=解析错误
- */
-template<typename Derived, typename SocketType>
-class RingBufferReadAwaitable : public ReadvAwaitable
+inline RpcError mapRpcReadError(const IOError& io_error,
+                                RpcErrorCode default_code = RpcErrorCode::INTERNAL_ERROR)
+{
+    if (IOError::contains(io_error.code(), kDisconnectError)) {
+        return RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed");
+    }
+    return RpcError::from(io_error, default_code);
+}
+
+template<typename ResultT = std::expected<bool, RpcError>>
+class RpcRingBufferReadStateBase
 {
 public:
-    RingBufferReadAwaitable(RingBuffer& ring_buffer, SocketType& socket)
-        : ReadvAwaitable(socket.controller(), detail::emptyIovecs(), 0)
-        , m_ring_buffer(ring_buffer)
-    {}
+    using ResultType = ResultT;
 
-    bool await_ready() const noexcept { return false; }
-
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        auto parse_result = derived().parseFromRingBuffer();
-        if (!parse_result.has_value() || parse_result.value()) {
-            m_cached_result = std::move(parse_result);
-            return false;
-        }
-        if (!prepareReadIovecs()) {
-            m_cached_result = std::unexpected(
-                RpcError(RpcErrorCode::INTERNAL_ERROR, "No writable ring buffer space"));
-            return false;
-        }
-        return ReadvAwaitable::await_suspend(handle);
+    explicit RpcRingBufferReadStateBase(RingBuffer& ring_buffer)
+        : m_ring_buffer(&ring_buffer)
+    {
     }
 
-    std::expected<bool, RpcError> await_resume() {
-        if (m_cached_result.has_value()) {
-            auto result = std::move(*m_cached_result);
-            m_cached_result.reset();
-            return result;
+    bool prepareReadWindow()
+    {
+        if (!prepareRingBufferReadWindow(*m_ring_buffer, m_read_iovecs, m_read_iov_count)) {
+            m_error.emplace(RpcErrorCode::INTERNAL_ERROR, "No writable ring buffer space");
+            return false;
         }
-        auto readv_result = ReadvAwaitable::await_resume();
-        if (!readv_result) {
-            if (IOError::contains(readv_result.error().code(), kDisconnectError)) {
-                return std::unexpected(
-                    RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed"));
-            }
-            return std::unexpected(
-                RpcError(RpcErrorCode::INTERNAL_ERROR, readv_result.error().message()));
-        }
-        if (m_parse_error.has_value()) {
-            return std::unexpected(std::move(*m_parse_error));
+        return true;
+    }
+
+    const struct iovec* recvIovecsData() const { return m_read_iovecs.data(); }
+    size_t recvIovecsCount() const { return m_read_iov_count; }
+
+    void setRecvError(const IOError& io_error)
+    {
+        m_error = mapRpcReadError(io_error);
+    }
+
+    void onPeerClosed()
+    {
+        m_error.emplace(RpcErrorCode::CONNECTION_CLOSED, "Connection closed");
+    }
+
+    void onBytesReceived(size_t bytes_read)
+    {
+        m_ring_buffer->produce(bytes_read);
+    }
+
+    ResultType takeResult()
+    {
+        if (m_error.has_value()) {
+            return std::unexpected(std::move(*m_error));
         }
         return true;
     }
 
 protected:
-    RingBuffer& ringBuffer() { return m_ring_buffer; }
+    RingBuffer& ringBuffer() { return *m_ring_buffer; }
 
-private:
-    Derived& derived() { return static_cast<Derived&>(*this); }
-
-#ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-        return handleCompleteImpl([&]() {
-            if (cqe == nullptr) return false;
-            return ReadvIOContext::handleComplete(cqe, handle);
-        });
-    }
-#else
-    bool handleComplete(GHandle handle) override {
-        return handleCompleteImpl([&]() {
-            return ReadvIOContext::handleComplete(handle);
-        });
-    }
-#endif
-
-    template<typename CompleteFn>
-    bool handleCompleteImpl(CompleteFn&& complete_fn) {
-        if (!complete_fn()) return false;
-        if (!m_result.has_value()) return true;
-
-        const size_t bytes_read = m_result.value();
-        if (bytes_read == 0) {
-            m_parse_error = RpcError(RpcErrorCode::CONNECTION_CLOSED, "Connection closed");
-            return true;
-        }
-        m_ring_buffer.produce(bytes_read);
-
-        auto parse_result = derived().parseFromRingBuffer();
-        if (!parse_result.has_value()) {
-            m_parse_error = parse_result.error();
-            return true;
-        }
-        if (parse_result.value()) return true;
-
-        if (!prepareReadIovecs()) {
-            m_parse_error = RpcError(RpcErrorCode::INTERNAL_ERROR,
-                                     "No writable ring buffer space");
-            return true;
-        }
-        return false;
-    }
-
-    bool prepareReadIovecs() {
-        m_read_iovec_count = m_ring_buffer.getWriteIovecs(m_read_iovecs);
-        ReadvIOContext::m_iovecs = std::span<const struct iovec>(m_read_iovecs.data(), m_read_iovec_count);
-        size_t writable = 0;
-        for (size_t i = 0; i < m_read_iovec_count; ++i) {
-            writable += m_read_iovecs[i].iov_len;
-        }
-        return writable > 0;
+    void setReadError(RpcError error)
+    {
+        m_error = std::move(error);
     }
 
 private:
-    RingBuffer& m_ring_buffer;
+    RingBuffer* m_ring_buffer = nullptr;
     std::array<struct iovec, 2> m_read_iovecs{};
-    size_t m_read_iovec_count = 0;
-    std::optional<std::expected<bool, RpcError>> m_cached_result;
-    std::optional<RpcError> m_parse_error;
+    size_t m_read_iov_count = 0;
+    std::optional<RpcError> m_error;
 };
 
-/**
- * @brief 可续写的写等待体CRTP基类
- *
- * @details Derived必须:
- *   1. 在构造函数中填充 m_iovecs 和设置 m_total_bytes
- *   2. 可选重写 await_ready() / await_resume()
- */
-template<typename Derived, typename SocketType>
-class ResumableWriteAwaitable : public WritevAwaitable
+template<typename ResultT = std::expected<bool, RpcError>>
+class RpcWriteStateBase
 {
 public:
-    explicit ResumableWriteAwaitable(SocketType& socket)
-        : WritevAwaitable(socket.controller(), detail::emptyIovecs(), 0)
-    {}
+    using ResultType = ResultT;
 
-    template<typename Handle>
-    auto await_suspend(Handle handle) {
-        syncWriteIovecs();
-        return WritevAwaitable::await_suspend(handle);
+    bool isComplete() const
+    {
+        return m_error.has_value() || m_iovecs.empty();
     }
 
-    std::expected<bool, RpcError> await_resume() {
-        auto writev_result = WritevAwaitable::await_resume();
-        if (!writev_result.has_value()) {
-            return std::unexpected(
-                RpcError::from(writev_result.error(), RpcErrorCode::INTERNAL_ERROR));
+    bool prepareWriteIovecs()
+    {
+        return true;
+    }
+
+    const struct iovec* writeIovecsData() const { return m_iovecs.data(); }
+    size_t writeIovecsCount() const { return m_iovecs.size(); }
+
+    void onBytesWritten(size_t bytes_written)
+    {
+        consumeWritevIovecs(m_iovecs, bytes_written);
+    }
+
+    void setSendError(const IOError& io_error)
+    {
+        m_error = RpcError::from(io_error, RpcErrorCode::INTERNAL_ERROR);
+    }
+
+    void onZeroWrite()
+    {
+        m_error = RpcError::from(IOError(kSendFailed, 0), RpcErrorCode::INTERNAL_ERROR);
+    }
+
+    ResultType takeResult()
+    {
+        if (m_error.has_value()) {
+            return std::unexpected(std::move(*m_error));
         }
         return true;
     }
 
-private:
-#ifdef USE_IOURING
-    bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-        if (cqe == nullptr) {
-            return m_iovecs.empty();
-        }
-        if (!WritevIOContext::handleComplete(cqe, handle)) {
-            return false;
-        }
-        return handleWriteResult();
-    }
-#else
-    bool handleComplete(GHandle handle) override {
-        if (!WritevIOContext::handleComplete(handle)) {
-            return false;
-        }
-        return handleWriteResult();
-    }
-#endif
-
-    bool handleWriteResult() {
-        if (!m_result.has_value()) {
-            return true;
-        }
-
-        const size_t sent_once = m_result.value();
-        if (sent_once == 0) {
-            m_result = std::unexpected(IOError(kSendFailed, 0));
-            return true;
-        }
-
-        m_total_sent += sent_once;
-        if (m_total_sent >= m_total_bytes) {
-            m_result = m_total_sent;
-            syncWriteIovecs();
-            return true;
-        }
-
-        detail::consumeWritevIovecs(m_iovecs, sent_once);
-        syncWriteIovecs();
-        return false;
-    }
-
 protected:
-    void syncWriteIovecs() {
-        WritevIOContext::m_iovecs = std::span<const struct iovec>(m_iovecs.data(), m_iovecs.size());
+    std::vector<struct iovec>& mutableIovecs() { return m_iovecs; }
+
+    void setWriteError(RpcError error)
+    {
+        m_error = std::move(error);
     }
 
-    std::vector<iovec> m_iovecs;
-    size_t m_total_bytes = 0;
-    size_t m_total_sent = 0;
+private:
+    std::vector<struct iovec> m_iovecs;
+    std::optional<RpcError> m_error;
 };
+
+class RpcVectorWriteState : public RpcWriteStateBase<>
+{
+public:
+    explicit RpcVectorWriteState(std::vector<char>&& data)
+        : m_data(std::move(data))
+    {
+        if (!m_data.empty()) {
+            mutableIovecs().push_back(iovec{m_data.data(), m_data.size()});
+        }
+    }
+
+private:
+    std::vector<char> m_data;
+};
+
+template<typename StateT>
+struct RpcRingBufferReadMachine
+{
+    using result_type = typename StateT::ResultType;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Read;
+
+    explicit RpcRingBufferReadMachine(std::shared_ptr<StateT> state)
+        : m_state(std::move(state))
+    {
+    }
+
+    MachineAction<result_type> advance()
+    {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (m_state->parseFromRingBuffer()) {
+            m_result = m_state->takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (!m_state->prepareReadWindow()) {
+            m_result = m_state->takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        return MachineAction<result_type>::waitReadv(
+            m_state->recvIovecsData(),
+            m_state->recvIovecsCount());
+    }
+
+    void onRead(std::expected<size_t, IOError> result)
+    {
+        if (!result.has_value()) {
+            m_state->setRecvError(result.error());
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_state->onPeerClosed();
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        m_state->onBytesReceived(result.value());
+    }
+
+    void onWrite(std::expected<size_t, IOError>)
+    {
+    }
+
+    std::shared_ptr<StateT> m_state;
+    std::optional<result_type> m_result;
+};
+
+template<typename StateT>
+struct RpcWritevMachine
+{
+    using result_type = typename StateT::ResultType;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Write;
+
+    explicit RpcWritevMachine(std::shared_ptr<StateT> state)
+        : m_state(std::move(state))
+    {
+    }
+
+    MachineAction<result_type> advance()
+    {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (m_state->isComplete()) {
+            m_result = m_state->takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (!m_state->prepareWriteIovecs()) {
+            m_result = m_state->takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        return MachineAction<result_type>::waitWritev(
+            m_state->writeIovecsData(),
+            m_state->writeIovecsCount());
+    }
+
+    void onRead(std::expected<size_t, IOError>)
+    {
+    }
+
+    void onWrite(std::expected<size_t, IOError> result)
+    {
+        if (!result.has_value()) {
+            m_state->setSendError(result.error());
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_state->onZeroWrite();
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        m_state->onBytesWritten(result.value());
+        if (m_state->isComplete()) {
+            m_result = m_state->takeResult();
+        }
+    }
+
+    std::shared_ptr<StateT> m_state;
+    std::optional<result_type> m_result;
+};
+
+} // namespace detail
 
 } // namespace galay::rpc
 

@@ -11,6 +11,7 @@
 
 #include "galay-rpc/kernel/RpcService.h"
 #include "galay-rpc/kernel/RpcStreamServer.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -112,10 +113,11 @@ int main(int argc, char* argv[]) {
         ring_buffer_size = static_cast<size_t>(std::strtoull(argv[3], nullptr, 10));
     }
 
+    const size_t resolved_io_count = resolveIoSchedulerCount(io_count);
     auto server = RpcStreamServerBuilder()
         .host("0.0.0.0")
         .port(port)
-        .ioSchedulerCount(io_count)
+        .ioSchedulerCount(resolved_io_count)
         .ringBufferSize(ring_buffer_size)
         .build();
     server.registerService(std::make_shared<StreamExampleService>());
@@ -124,6 +126,9 @@ int main(int argc, char* argv[]) {
     std::cout << "=== Stream RPC Server Example ===\n";
     std::cout << "listen: 0.0.0.0:" << port << "\n";
     std::cout << "io_schedulers: " << (io_count == 0 ? "auto" : std::to_string(io_count)) << "\n";
+    if (io_count == 0) {
+        std::cout << "resolved_io_schedulers: " << resolved_io_count << "\n";
+    }
     std::cout << "ring_buffer: " << ring_buffer_size << " bytes\n";
 
     while (g_running.load(std::memory_order_acquire) && server.isRunning()) {
