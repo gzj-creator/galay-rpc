@@ -43,7 +43,9 @@
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcBase.h"
 #include <array>
+#include <cstring>
 #include <string>
+#include <string_view>
 #include <span>
 #include <utility>
 
@@ -61,20 +63,94 @@ public:
 
     StreamMessage(uint32_t stream_id, const char* data, size_t len)
         : m_stream_id(stream_id)
-        , m_payload(data, data + len)
-        , m_is_end(false) {}
+        , m_is_end(false)
+    {
+        if (data != nullptr && len > 0) {
+            payload(data, len);
+        }
+    }
 
     uint32_t streamId() const { return m_stream_id; }
     void streamId(uint32_t id) { m_stream_id = id; }
 
-    const std::vector<char>& payload() const { return m_payload; }
-    std::string payloadStr() const { return std::string(m_payload.begin(), m_payload.end()); }
+    const std::vector<char>& payload() const {
+        materializePayloadIfNeeded();
+        return m_payload;
+    }
+    size_t payloadSize() const {
+        return m_payload_owned ? m_payload.size() : m_payload_view.size();
+    }
+    /**
+     * @brief 获取当前 payload 视图
+     * @return 若消息持有自有缓冲则返回单段视图；若消息借用外部内存则返回对应借用视图
+     *
+     * @note 借用视图的生命周期由外部内存决定；若需要长期持有，请调用 `payload()` /
+     *       `payloadStr()` 触发实体化副本。
+     */
+    RpcPayloadView payloadView() const {
+        if (m_payload_owned) {
+            return RpcPayloadView{
+                m_payload.data(),
+                m_payload.size(),
+                nullptr,
+                0
+            };
+        }
+        return m_payload_view;
+    }
+    std::string payloadStr() const {
+        materializePayloadIfNeeded();
+        return std::string(m_payload.begin(), m_payload.end());
+    }
+    bool payloadEquals(std::string_view expected) const {
+        const auto view = payloadView();
+        if (view.size() != expected.size()) {
+            return false;
+        }
+        if (view.segment1_len > 0 &&
+            std::memcmp(view.segment1, expected.data(), view.segment1_len) != 0) {
+            return false;
+        }
+        if (view.segment2_len > 0 &&
+            std::memcmp(view.segment2,
+                        expected.data() + view.segment1_len,
+                        view.segment2_len) != 0) {
+            return false;
+        }
+        return true;
+    }
 
     void payload(const char* data, size_t len) {
         m_payload.assign(data, data + len);
+        m_payload_owned = true;
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
     }
     void payload(const std::string& data) {
         m_payload.assign(data.begin(), data.end());
+        m_payload_owned = true;
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
+    }
+    /**
+     * @brief 设置借用型 payload 视图
+     * @param view 外部 payload 视图
+     *
+     * @note 调用方必须保证 `view` 指向的内存在消息被消费完成前保持有效；
+     *       如需脱离外部缓冲长期持有，请改用 `payload(...)`。
+     */
+    void payloadView(const RpcPayloadView& view) {
+        m_payload.clear();
+        m_payload_view = view;
+        m_payload_owned = false;
     }
 
     bool isEnd() const { return m_is_end; }
@@ -87,7 +163,8 @@ public:
      * @brief 序列化流消息
      */
     std::vector<char> serialize(RpcMessageType type) const {
-        size_t body_size = m_payload.size();
+        const RpcPayloadView payload_view = payloadView();
+        size_t body_size = payload_view.size();
         std::vector<char> buffer(RPC_HEADER_SIZE + body_size);
 
         RpcHeader header;
@@ -96,8 +173,13 @@ public:
         header.m_body_length = static_cast<uint32_t>(body_size);
         header.serialize(buffer.data());
 
-        if (!m_payload.empty()) {
-            std::memcpy(buffer.data() + RPC_HEADER_SIZE, m_payload.data(), m_payload.size());
+        size_t offset = RPC_HEADER_SIZE;
+        if (payload_view.segment1_len > 0) {
+            std::memcpy(buffer.data() + offset, payload_view.segment1, payload_view.segment1_len);
+            offset += payload_view.segment1_len;
+        }
+        if (payload_view.segment2_len > 0) {
+            std::memcpy(buffer.data() + offset, payload_view.segment2, payload_view.segment2_len);
         }
 
         return buffer;
@@ -108,14 +190,46 @@ public:
      */
     bool deserializeBody(const char* body, size_t length) {
         if (length > 0) {
-            m_payload.assign(body, body + length);
+            payload(body, length);
+        } else {
+            m_payload.clear();
+            m_payload_view = RpcPayloadView{};
+            m_payload_owned = true;
         }
         return true;
     }
 
 private:
+    void materializePayloadIfNeeded() const {
+        if (m_payload_owned) {
+            return;
+        }
+
+        const size_t total = m_payload_view.size();
+        m_payload.resize(total);
+        size_t offset = 0;
+        if (m_payload_view.segment1_len > 0) {
+            std::memcpy(m_payload.data(), m_payload_view.segment1, m_payload_view.segment1_len);
+            offset += m_payload_view.segment1_len;
+        }
+        if (m_payload_view.segment2_len > 0) {
+            std::memcpy(m_payload.data() + offset, m_payload_view.segment2, m_payload_view.segment2_len);
+        }
+
+        m_payload_view = RpcPayloadView{
+            m_payload.data(),
+            m_payload.size(),
+            nullptr,
+            0
+        };
+        m_payload_owned = true;
+    }
+
+private:
     uint32_t m_stream_id = 0;
-    std::vector<char> m_payload;
+    mutable std::vector<char> m_payload;
+    mutable RpcPayloadView m_payload_view{};
+    mutable bool m_payload_owned = true;
     bool m_is_end = false;
     RpcMessageType m_msg_type = RpcMessageType::STREAM_DATA;
 };
@@ -243,11 +357,13 @@ public:
 
             if (msg_type == RpcMessageType::STREAM_END || msg_type == RpcMessageType::STREAM_CANCEL) {
                 m_message->setEnd(true);
+                m_message->payloadView(RpcPayloadView{});
                 m_state = State::ReadHeader;
                 return true;
             }
 
             if (m_body_length == 0) {
+                m_message->payloadView(RpcPayloadView{});
                 m_state = State::ReadHeader;
                 return true;
             }
@@ -262,10 +378,13 @@ public:
                 return false;
             }
 
-            std::vector<char> body(m_body_length);
-            copyFromIovecs(read_iovecs, 0, body.data(), m_body_length);
+            RpcPayloadView payload_view;
+            if (!payloadViewFromIovecs(read_iovecs, 0, m_body_length, payload_view)) {
+                setReadError(RpcError(RpcErrorCode::DESERIALIZATION_ERROR, "Invalid stream payload view"));
+                return true;
+            }
 
-            m_message->deserializeBody(body.data(), body.size());
+            m_message->payloadView(payload_view);
             rb.consume(m_body_length);
             m_state = State::ReadHeader;
             return true;
@@ -286,6 +405,110 @@ private:
     size_t m_body_length = 0;
 };
 
+class StreamFrameWriteState : public RpcWriteStateBase<RpcAwaitableResult>
+{
+public:
+    StreamFrameWriteState(uint32_t stream_id, RpcMessageType type)
+    {
+        RpcHeader header;
+        header.m_type = static_cast<uint8_t>(type);
+        header.m_request_id = stream_id;
+        header.m_body_length = 0;
+        header.serialize(m_header.data());
+
+        auto& iovecs = mutableIovecs();
+        iovecs.reserve(1);
+        iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+    }
+
+    StreamFrameWriteState(uint32_t stream_id, const char* data, size_t len)
+    {
+        if (len > 0) {
+            m_owned_payload.assign(data, data + len);
+        }
+        buildDataFrame(stream_id, payloadView());
+    }
+
+    StreamFrameWriteState(uint32_t stream_id, const RpcPayloadView& payload_view)
+    {
+        buildDataFrame(stream_id, payload_view);
+    }
+
+    StreamFrameWriteState(uint32_t stream_id,
+                          std::string_view service,
+                          std::string_view method)
+        : m_service(service)
+        , m_method(method)
+    {
+        const size_t body_size = 2 + m_service.size() + 2 + m_method.size();
+
+        RpcHeader header;
+        header.m_type = static_cast<uint8_t>(RpcMessageType::STREAM_INIT);
+        header.m_request_id = stream_id;
+        header.m_body_length = static_cast<uint32_t>(body_size);
+        header.serialize(m_header.data());
+
+        m_service_len = rpcHtons(static_cast<uint16_t>(m_service.size()));
+        m_method_len = rpcHtons(static_cast<uint16_t>(m_method.size()));
+        auto& iovecs = mutableIovecs();
+        iovecs.reserve(5);
+        iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+        iovecs.push_back(iovec{&m_service_len, sizeof(m_service_len)});
+        if (!m_service.empty()) {
+            iovecs.push_back(iovec{const_cast<char*>(m_service.data()), m_service.size()});
+        }
+        iovecs.push_back(iovec{&m_method_len, sizeof(m_method_len)});
+        if (!m_method.empty()) {
+            iovecs.push_back(iovec{const_cast<char*>(m_method.data()), m_method.size()});
+        }
+    }
+
+private:
+    RpcPayloadView payloadView() const
+    {
+        if (m_owned_payload.empty()) {
+            return RpcPayloadView{};
+        }
+        return RpcPayloadView{
+            m_owned_payload.data(),
+            m_owned_payload.size(),
+            nullptr,
+            0
+        };
+    }
+
+    void buildDataFrame(uint32_t stream_id, const RpcPayloadView& payload_view)
+    {
+        RpcHeader header;
+        header.m_type = static_cast<uint8_t>(RpcMessageType::STREAM_DATA);
+        header.m_request_id = stream_id;
+        header.m_body_length = static_cast<uint32_t>(payload_view.size());
+        header.serialize(m_header.data());
+        auto& iovecs = mutableIovecs();
+        iovecs.reserve(3);
+        iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
+        if (payload_view.segment1_len > 0) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(payload_view.segment1),
+                payload_view.segment1_len
+            });
+        }
+        if (payload_view.segment2_len > 0) {
+            iovecs.push_back(iovec{
+                const_cast<char*>(payload_view.segment2),
+                payload_view.segment2_len
+            });
+        }
+    }
+
+    std::array<char, RPC_HEADER_SIZE> m_header{};
+    std::vector<char> m_owned_payload;
+    std::string m_service;
+    std::string m_method;
+    uint16_t m_service_len = 0;
+    uint16_t m_method_len = 0;
+};
+
 }  // namespace detail
 
 /**
@@ -297,12 +520,12 @@ class SendStreamDataAwaitable : public TimeoutSupport<SendStreamDataAwaitable<So
 public:
     using Result = detail::RpcAwaitableResult;
 
-    SendStreamDataAwaitable(SocketType& socket, std::vector<char>&& data)
-        : m_state(std::make_shared<detail::RpcVectorWriteState>(std::move(data)))
+    SendStreamDataAwaitable(SocketType& socket, std::shared_ptr<detail::StreamFrameWriteState> state)
+        : m_state(std::move(state))
         , m_inner(
             AwaitableBuilder<Result>::fromStateMachine(
                 socket.controller(),
-                detail::RpcWritevMachine<detail::RpcVectorWriteState>(m_state))
+                detail::RpcWritevMachine<detail::StreamFrameWriteState>(m_state))
                 .build())
     {}
 
@@ -322,9 +545,9 @@ public:
 
 private:
     using InnerAwaitable =
-        StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcVectorWriteState>>;
+        StateMachineAwaitable<detail::RpcWritevMachine<detail::StreamFrameWriteState>>;
 
-    std::shared_ptr<detail::RpcVectorWriteState> m_state;
+    std::shared_ptr<detail::StreamFrameWriteState> m_state;
     InnerAwaitable m_inner;
 };
 
@@ -405,11 +628,18 @@ public:
     {}
 
     /**
+     * @brief 更新当前写入器绑定的 stream_id
+     * @param stream_id 后续发送帧要使用的逻辑流 ID
+     */
+    void streamId(uint32_t stream_id) { m_stream_id = stream_id; }
+
+    /**
      * @brief 发送流数据
      */
     SendStreamDataAwaitable<SocketType> sendData(const char* data, size_t len) {
-        StreamMessage msg(m_stream_id, data, len);
-        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_DATA));
+        return SendStreamDataAwaitable<SocketType>(
+            *m_socket,
+            std::make_shared<detail::StreamFrameWriteState>(m_stream_id, data, len));
     }
 
     SendStreamDataAwaitable<SocketType> sendData(const std::string& data) {
@@ -417,35 +647,51 @@ public:
     }
 
     /**
+     * @brief 发送借用型 payload 视图
+     * @param payload_view 调用方拥有的 payload 视图
+     *
+     * @note 调用方需保证 payload 所指向内存在本次 `co_await` 完成前保持有效。
+     */
+    SendStreamDataAwaitable<SocketType> sendData(const RpcPayloadView& payload_view) {
+        return SendStreamDataAwaitable<SocketType>(
+            *m_socket,
+            std::make_shared<detail::StreamFrameWriteState>(m_stream_id, payload_view));
+    }
+
+    /**
      * @brief 发送流初始化请求
      */
     SendStreamDataAwaitable<SocketType> sendInit(const std::string& service, const std::string& method) {
-        StreamInitRequest init(m_stream_id, service, method);
-        return SendStreamDataAwaitable<SocketType>(*m_socket, init.serialize());
+        return SendStreamDataAwaitable<SocketType>(
+            *m_socket,
+            std::make_shared<detail::StreamFrameWriteState>(m_stream_id, service, method));
     }
 
     /**
      * @brief 发送流初始化确认
      */
     SendStreamDataAwaitable<SocketType> sendInitAck() {
-        StreamMessage msg(m_stream_id, nullptr, 0);
-        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_INIT_ACK));
+        return SendStreamDataAwaitable<SocketType>(
+            *m_socket,
+            std::make_shared<detail::StreamFrameWriteState>(m_stream_id, RpcMessageType::STREAM_INIT_ACK));
     }
 
     /**
      * @brief 发送流结束
      */
     SendStreamDataAwaitable<SocketType> sendEnd() {
-        StreamMessage msg(m_stream_id, nullptr, 0);
-        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_END));
+        return SendStreamDataAwaitable<SocketType>(
+            *m_socket,
+            std::make_shared<detail::StreamFrameWriteState>(m_stream_id, RpcMessageType::STREAM_END));
     }
 
     /**
      * @brief 发送流取消
      */
     SendStreamDataAwaitable<SocketType> sendCancel() {
-        StreamMessage msg(m_stream_id, nullptr, 0);
-        return SendStreamDataAwaitable<SocketType>(*m_socket, msg.serialize(RpcMessageType::STREAM_CANCEL));
+        return SendStreamDataAwaitable<SocketType>(
+            *m_socket,
+            std::make_shared<detail::StreamFrameWriteState>(m_stream_id, RpcMessageType::STREAM_CANCEL));
     }
 
 private:
@@ -474,6 +720,14 @@ public:
     {}
 
     uint32_t streamId() const { return m_stream_id; }
+    /**
+     * @brief 更新逻辑流 ID，并同步到底层写入器
+     * @param stream_id 新的逻辑流 ID
+     */
+    void streamId(uint32_t stream_id) {
+        m_stream_id = stream_id;
+        m_writer.streamId(stream_id);
+    }
     const std::string& serviceName() const { return m_service_name; }
     const std::string& methodName() const { return m_method_name; }
 
@@ -502,6 +756,13 @@ public:
     SendStreamDataAwaitable<SocketType> sendInitAck() { return m_writer.sendInitAck(); }
     SendStreamDataAwaitable<SocketType> sendData(const char* data, size_t len) { return m_writer.sendData(data, len); }
     SendStreamDataAwaitable<SocketType> sendData(const std::string& data) { return m_writer.sendData(data); }
+    /**
+     * @brief 发送借用型 payload 视图
+     * @param payload_view 调用方拥有的 payload 视图
+     *
+     * @note 调用方需保证 payload 所指向内存在本次 `co_await` 完成前保持有效。
+     */
+    SendStreamDataAwaitable<SocketType> sendData(const RpcPayloadView& payload_view) { return m_writer.sendData(payload_view); }
     SendStreamDataAwaitable<SocketType> sendEnd() { return m_writer.sendEnd(); }
     SendStreamDataAwaitable<SocketType> sendCancel() { return m_writer.sendCancel(); }
 

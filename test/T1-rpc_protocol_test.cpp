@@ -4,6 +4,7 @@
  */
 
 #include "test_result_writer.h"
+#include "galay-rpc/kernel/RpcStream.h"
 #include "galay-rpc/protoc/RpcMessage.h"
 #include "galay-rpc/protoc/RpcCodec.h"
 #include <iostream>
@@ -173,6 +174,72 @@ void testRpcCallModeFlags(test::TestResultWriter& writer) {
         std::string(response_decoded->payload().data(), response_decoded->payload().size()) == payload);
 }
 
+void testStreamMessageBorrowedPayload(test::TestResultWriter& writer) {
+    static const char segment1[] = "hello";
+    static const char segment2[] = "world";
+
+    StreamMessage message;
+    message.streamId(900);
+    message.payloadView(RpcPayloadView{
+        segment1,
+        sizeof(segment1) - 1,
+        segment2,
+        sizeof(segment2) - 1
+    });
+
+    const auto view = message.payloadView();
+    writer.writeTestCase("StreamMessage borrowed payload view",
+        message.streamId() == 900 &&
+        message.payloadSize() == 10 &&
+        view.segment1_len == 5 &&
+        view.segment2_len == 5 &&
+        std::string(message.payload().data(), message.payload().size()) == "helloworld");
+}
+
+void testStreamMessageBorrowedPayloadSerialize(test::TestResultWriter& writer) {
+    static const char segment1[] = "hello";
+    static const char segment2[] = "world";
+
+    StreamMessage message;
+    message.streamId(902);
+    message.payloadView(RpcPayloadView{
+        segment1,
+        sizeof(segment1) - 1,
+        segment2,
+        sizeof(segment2) - 1
+    });
+
+    const auto serialized = message.serialize(RpcMessageType::STREAM_DATA);
+    RpcHeader header;
+    const bool header_ok = header.deserialize(serialized.data());
+    const std::string body(serialized.data() + RPC_HEADER_SIZE,
+                           serialized.data() + serialized.size());
+    const bool passed =
+        header_ok &&
+        header.m_type == static_cast<uint8_t>(RpcMessageType::STREAM_DATA) &&
+        header.m_request_id == 902 &&
+        header.m_body_length == 10 &&
+        body == "helloworld";
+
+    writer.writeTestCase("StreamMessage borrowed payload serialize",
+        passed,
+        passed ? "" :
+            ("type=" + std::to_string(static_cast<int>(header.m_type)) +
+             ", request_id=" + std::to_string(header.m_request_id) +
+             ", body_length=" + std::to_string(header.m_body_length) +
+             ", body=" + body));
+}
+
+void testStreamMessageCtorOwnsPayload(test::TestResultWriter& writer) {
+    const std::string payload = "ctor-payload";
+    StreamMessage message(901, payload.data(), payload.size());
+
+    writer.writeTestCase("StreamMessage constructor stores payload",
+        message.streamId() == 901 &&
+        message.payloadSize() == payload.size() &&
+        message.payloadStr() == payload);
+}
+
 int main() {
     test::TestResultWriter writer("T1-RpcProtocolTest.result");
 
@@ -188,6 +255,9 @@ int main() {
     testEmptyPayload(writer);
     testLargePayload(writer);
     testRpcCallModeFlags(writer);
+    testStreamMessageBorrowedPayload(writer);
+    testStreamMessageBorrowedPayloadSerialize(writer);
+    testStreamMessageCtorOwnsPayload(writer);
 
     writer.writeSummary();
 

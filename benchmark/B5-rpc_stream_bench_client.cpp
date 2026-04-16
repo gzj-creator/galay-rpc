@@ -5,6 +5,7 @@
 
 #include "galay-rpc/kernel/RpcClient.h"
 #include "galay-rpc/kernel/RpcStream.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include "galay-kernel/kernel/Runtime.h"
 #include <algorithm>
@@ -34,8 +35,8 @@ constexpr size_t kDefaultIoSchedulers = 0;
 constexpr int kMaxConnectRetries = 15;
 constexpr auto kRetryInterval = std::chrono::seconds(1);
 constexpr size_t kLatencyReserve = 10000;
-// Flush each completed stream latency immediately to avoid sample loss near shutdown.
-constexpr size_t kLatencyFlushBatch = 1;
+// Batch global latency aggregation to avoid turning the benchmark itself into the bottleneck.
+constexpr size_t kLatencyFlushBatch = 1024;
 
 struct BenchConfig {
     std::string host = "127.0.0.1";
@@ -67,6 +68,12 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                          config.payload_size * config.frames_per_stream * 2 + RPC_HEADER_SIZE * 64);
 
     std::string payload(config.payload_size, 'S');
+    const RpcPayloadView payload_view{
+        payload.data(),
+        payload.size(),
+        nullptr,
+        0
+    };
     std::vector<uint64_t> local_latencies;
     local_latencies.reserve(kLatencyReserve);
     auto flushLocalLatencies = [&local_latencies]() {
@@ -107,15 +114,18 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
         }
 
         bool reconnect_needed = false;
+        auto stream_result = client.createStream(next_stream_id++, "StreamBenchService", "echo");
+        if (!stream_result.has_value()) {
+            break;
+        }
+        auto stream = stream_result.value();
+        StreamMessage init_ack;
+        StreamMessage echo_frame;
+        StreamMessage tail_frame;
 
         while (g_running.load(std::memory_order_relaxed) && !reconnect_needed) {
             const uint32_t stream_id = next_stream_id++;
-            auto stream_result = client.createStream(stream_id, "StreamBenchService", "echo");
-            if (!stream_result.has_value()) {
-                reconnect_needed = true;
-                break;
-            }
-            auto stream = stream_result.value();
+            stream.streamId(stream_id);
 
             const auto stream_start = std::chrono::steady_clock::now();
 
@@ -127,7 +137,6 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                 break;
             }
 
-            StreamMessage init_ack;
             auto recv_result = co_await stream.read(init_ack);
             if (!recv_result.has_value()) {
                 reconnect_needed = true;
@@ -149,7 +158,7 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                 while (sent_frames < config.frames_per_stream &&
                        sent_frames - recv_frames < frame_window &&
                        g_running.load(std::memory_order_relaxed)) {
-                    send_result = co_await stream.sendData(payload.data(), payload.size());
+                    send_result = co_await stream.sendData(payload_view);
                     if (!send_result.has_value()) {
                         reconnect_needed = true;
                     }
@@ -166,7 +175,6 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                     continue;
                 }
 
-                StreamMessage echo_frame;
                 recv_result = co_await stream.read(echo_frame);
                 if (!recv_result.has_value()) {
                     reconnect_needed = true;
@@ -176,7 +184,8 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
                 }
 
                 if (echo_frame.messageType() != RpcMessageType::STREAM_DATA ||
-                    echo_frame.streamId() != stream_id) {
+                    echo_frame.streamId() != stream_id ||
+                    !echo_frame.payloadEquals(payload)) {
                     reconnect_needed = true;
                     break;
                 }
@@ -202,7 +211,6 @@ Coroutine benchWorker(const BenchConfig& config, uint32_t worker_id) {
 
             bool got_end = false;
             while (!got_end) {
-                StreamMessage tail_frame;
                 recv_result = co_await stream.read(tail_frame);
                 if (!recv_result.has_value()) {
                     reconnect_needed = true;
@@ -312,16 +320,33 @@ int main(int argc, char* argv[]) {
     std::cout << "Frames per stream: " << config.frames_per_stream << "\n";
     std::cout << "Frame window: " << std::max<size_t>(1, std::min(config.frame_window, config.frames_per_stream)) << "\n";
     std::cout << "Duration: " << config.duration_sec << " seconds\n";
+    const size_t resolved_io_schedulers = resolveIoSchedulerCount(config.io_schedulers);
     std::cout << "IO Schedulers: "
-              << (config.io_schedulers == 0 ? "auto" : std::to_string(config.io_schedulers))
+              << (config.io_schedulers == 0
+                      ? "auto (" + std::to_string(resolved_io_schedulers) + ")"
+                      : std::to_string(resolved_io_schedulers))
               << "\n\n";
 
-    Runtime runtime = RuntimeBuilder().ioSchedulerCount(config.io_schedulers).computeSchedulerCount(1).build();
+    g_stream_latencies.reserve(config.connections * std::max<size_t>(config.duration_sec, size_t{1}) * 512);
+
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(resolved_io_schedulers).computeSchedulerCount(1).build();
     runtime.start();
 
     std::cout << "Starting " << config.connections << " stream connections...\n";
+    bool schedule_failed = false;
     for (size_t i = 0; i < config.connections; ++i) {
-        runtime.getNextIOScheduler()->spawn(benchWorker(config, static_cast<uint32_t>(i)));
+        auto* scheduler = runtime.getNextIOScheduler();
+        if (scheduler == nullptr ||
+            !scheduleTask(scheduler, benchWorker(config, static_cast<uint32_t>(i)))) {
+            schedule_failed = true;
+            break;
+        }
+    }
+    if (schedule_failed) {
+        std::cerr << "Failed to schedule stream benchmark workers on IO scheduler(s)\n";
+        g_running.store(false, std::memory_order_relaxed);
+        runtime.stop();
+        return 1;
     }
 
     std::cout << "Benchmark running...\n\n";

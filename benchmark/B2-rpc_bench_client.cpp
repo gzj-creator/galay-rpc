@@ -4,6 +4,7 @@
  */
 
 #include "galay-rpc/kernel/RpcConn.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
@@ -274,21 +275,34 @@ int main(int argc, char* argv[]) {
     std::cout << "Connections: " << config.connections << "\n";
     std::cout << "Payload size: " << config.payload_size << " bytes\n";
     std::cout << "Duration: " << config.duration_sec << " seconds\n";
+    const size_t resolved_io_schedulers = resolveIoSchedulerCount(config.io_schedulers);
     std::cout << "IO Schedulers: "
-              << (config.io_schedulers == 0 ? "auto" : std::to_string(config.io_schedulers))
+              << (config.io_schedulers == 0
+                      ? "auto (" + std::to_string(resolved_io_schedulers) + ")"
+                      : std::to_string(resolved_io_schedulers))
               << "\n";
     std::cout << "Pipeline depth: " << std::max<size_t>(1, config.pipeline_depth) << "\n";
     std::cout << "RPC mode: " << callModeToString(config.mode) << "\n";
     std::cout << "\n";
 
-    Runtime runtime = RuntimeBuilder().ioSchedulerCount(config.io_schedulers).computeSchedulerCount(1).build();
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(resolved_io_schedulers).computeSchedulerCount(1).build();
     runtime.start();
 
     // 启动所有连接
     std::cout << "Starting " << config.connections << " connections...\n";
+    bool schedule_failed = false;
     for (size_t i = 0; i < config.connections; ++i) {
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(benchWorker(config));
+        if (scheduler == nullptr || !scheduleTask(scheduler, benchWorker(config))) {
+            schedule_failed = true;
+            break;
+        }
+    }
+    if (schedule_failed) {
+        std::cerr << "Failed to schedule benchmark workers on IO scheduler(s)\n";
+        g_running.store(false, std::memory_order_relaxed);
+        runtime.stop();
+        return 1;
     }
 
     std::cout << "Benchmark running...\n\n";

@@ -5,6 +5,7 @@
 
 #include "galay-rpc/kernel/RpcService.h"
 #include "galay-rpc/kernel/RpcStreamServer.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -34,21 +35,15 @@ public:
     }
 
     Coroutine echo(RpcStream& stream) {
-        uint64_t frames = 0;
-        uint64_t bytes = 0;
-
+        StreamMessage msg;
         while (true) {
-            StreamMessage msg;
             auto recv_result = co_await stream.read(msg);
             if (!recv_result.has_value()) {
                 co_return;
             }
 
             if (msg.messageType() == RpcMessageType::STREAM_DATA) {
-                frames += 1;
-                bytes += msg.payload().size();
-
-                auto send_result = co_await stream.sendData(msg.payload().data(), msg.payload().size());
+                auto send_result = co_await stream.sendData(msg.payloadView());
                 if (!send_result.has_value()) {
                     co_return;
                 }
@@ -56,16 +51,9 @@ public:
             }
 
             if (msg.messageType() == RpcMessageType::STREAM_END) {
-                const std::string summary =
-                    "frames=" + std::to_string(frames) +
-                    ", bytes=" + std::to_string(bytes);
-
-                auto send_result = co_await stream.sendData(summary.data(), summary.size());
-                if (!send_result.has_value()) {
-                    co_return;
-                }
-
-                send_result = co_await stream.sendEnd();
+                // Keep the public stream benchmark aligned with the Rust mapping:
+                // the server echoes inbound frames and then ends the stream directly.
+                auto send_result = co_await stream.sendEnd();
                 if (!send_result.has_value()) {
                     co_return;
                 }
@@ -105,10 +93,11 @@ int main(int argc, char* argv[]) {
         ring_buffer_size = static_cast<size_t>(std::strtoull(argv[3], nullptr, 10));
     }
 
+    const size_t resolved_io_count = resolveIoSchedulerCount(io_count);
     auto server = RpcStreamServerBuilder()
         .host("0.0.0.0")
         .port(port)
-        .ioSchedulerCount(io_count)
+        .ioSchedulerCount(resolved_io_count)
         .ringBufferSize(ring_buffer_size)
         .backlog(1024)
         .build();
@@ -120,6 +109,9 @@ int main(int argc, char* argv[]) {
     std::cout << "IO Schedulers: "
               << (io_count == 0 ? "auto" : std::to_string(io_count))
               << "\n";
+    if (io_count == 0) {
+        std::cout << "Resolved IO Schedulers: " << resolved_io_count << "\n";
+    }
     std::cout << "RingBuffer size: " << ring_buffer_size << " bytes\n";
     std::cout << "Stream benchmark server started. Press Ctrl+C to stop.\n";
 

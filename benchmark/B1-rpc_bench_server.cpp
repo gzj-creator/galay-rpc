@@ -5,6 +5,7 @@
 
 #include "galay-rpc/kernel/RpcServer.h"
 #include "galay-rpc/kernel/RpcService.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include <iostream>
 #include <csignal>
 #include <atomic>
@@ -67,7 +68,11 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== RPC Benchmark Server ===\n";
     std::cout << "Port: " << port << "\n";
+    const size_t resolved_io_count = resolveIoSchedulerCount(io_count);
     std::cout << "IO Schedulers: " << (io_count == 0 ? "auto" : std::to_string(io_count)) << "\n";
+    if (io_count == 0) {
+        std::cout << "Resolved IO Schedulers: " << resolved_io_count << "\n";
+    }
     std::cout << "RingBuffer size: " << ring_buffer_size << " bytes\n";
 
     auto service = std::make_shared<BenchEchoService>();
@@ -75,7 +80,7 @@ int main(int argc, char* argv[]) {
     auto server = RpcServerBuilder()
         .host("0.0.0.0")
         .port(port)
-        .ioSchedulerCount(io_count)
+        .ioSchedulerCount(resolved_io_count)
         .backlog(kDefaultBacklog)
         .ringBufferSize(ring_buffer_size)
         .build();

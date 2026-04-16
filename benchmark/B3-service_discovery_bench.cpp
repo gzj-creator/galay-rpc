@@ -4,11 +4,11 @@
  *
  * @details 专门测试 AsyncLocalServiceRegistry 的性能
  *
- * 注意：AsyncLocalServiceRegistry 返回 Awaitable& 的设计适用于单调用者场景。
- * 多调用者共享时，每个调用者应使用独立的 registry 实例。
+ * 注意：每个 worker 使用独立的 registry 实例，避免共享状态竞争。
  */
 
 #include "galay-rpc/kernel/ServiceDiscovery.h"
+#include "galay-rpc/utils/RuntimeCompat.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
@@ -33,7 +33,7 @@ void signalHandler(int) {
  * @brief 压测协程 - 每个 worker 使用独立的 registry
  */
 Coroutine benchWorker(size_t worker_id) {
-    // 每个 worker 独立的 registry，避免 Awaitable& 并发冲突
+    // 每个 worker 独立的 registry，避免共享状态竞争
     AsyncLocalServiceRegistry registry;
 
     ServiceEndpoint endpoint;
@@ -45,7 +45,7 @@ Coroutine benchWorker(size_t worker_id) {
 
     while (g_running.load(std::memory_order_relaxed)) {
         // 注册服务
-        co_await registry.registerServiceAsync(endpoint).wait();
+        co_await registry.registerServiceAsync(endpoint);
         if (!registry.lastError().isOk()) {
             g_errors.fetch_add(1, std::memory_order_relaxed);
             continue;
@@ -53,7 +53,7 @@ Coroutine benchWorker(size_t worker_id) {
         g_register_ops.fetch_add(1, std::memory_order_relaxed);
 
         // 发现服务
-        co_await registry.discoverServiceAsync(endpoint.service_name).wait();
+        co_await registry.discoverServiceAsync(endpoint.service_name);
         if (!registry.lastError().isOk()) {
             g_errors.fetch_add(1, std::memory_order_relaxed);
         } else {
@@ -61,7 +61,7 @@ Coroutine benchWorker(size_t worker_id) {
         }
 
         // 注销服务
-        co_await registry.deregisterServiceAsync(endpoint).wait();
+        co_await registry.deregisterServiceAsync(endpoint);
         if (!registry.lastError().isOk()) {
             g_errors.fetch_add(1, std::memory_order_relaxed);
         } else {
@@ -101,15 +101,30 @@ int main(int argc, char* argv[]) {
     std::cout << "=== ServiceDiscovery Benchmark ===\n";
     std::cout << "Workers: " << num_workers << "\n";
     std::cout << "Duration: " << duration_sec << " seconds\n";
-    std::cout << "IO Schedulers: " << io_schedulers << "\n\n";
+    const size_t resolved_io_schedulers = resolveIoSchedulerCount(io_schedulers);
+    std::cout << "IO Schedulers: "
+              << (io_schedulers == 0
+                      ? "auto (" + std::to_string(resolved_io_schedulers) + ")"
+                      : std::to_string(resolved_io_schedulers))
+              << "\n\n";
 
-    Runtime runtime = RuntimeBuilder().ioSchedulerCount(io_schedulers).computeSchedulerCount(1).build();
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(resolved_io_schedulers).computeSchedulerCount(1).build();
     runtime.start();
 
     std::cout << "Starting " << num_workers << " workers...\n";
+    bool schedule_failed = false;
     for (size_t i = 0; i < num_workers; ++i) {
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(benchWorker(i));
+        if (scheduler == nullptr || !scheduleTask(scheduler, benchWorker(i))) {
+            schedule_failed = true;
+            break;
+        }
+    }
+    if (schedule_failed) {
+        std::cerr << "Failed to schedule service discovery benchmark workers\n";
+        g_running.store(false, std::memory_order_relaxed);
+        runtime.stop();
+        return 1;
     }
 
     std::cout << "Benchmark running...\n\n";
