@@ -240,6 +240,11 @@ cmake --build build-mod --target galay-rpc-modules --parallel
 - `BUILD_MODULE_EXAMPLES` 依赖 CMake `>= 3.28` 且需要支持 C++ 模块的生成器
 - benchmark 结果与机器、编译器、payload、pipeline 深度、调度器数量强相关；没有原始输出与环境记录的数字不应被视为当前版本的可审计结论
 
+### Rust 对标入口
+
+- `scripts/S3-Bench-Rust-Compare.sh` 是基于 `B1-RpcBenchServer` / `B2-RpcBenchClient` 的请求/响应压测流程，默认会在同台机器上启动 C++ 服务端，并执行客户端命令。完成 C++ 端实验后脚本会提示或执行 `RUST_BASELINE_CMD`（可指向 `benchmark/compare/rust/tonic` 中的实现），以确保记录 C++ 与 Rust 的同构 workloads。
+- `benchmark/compare/rust/tonic/README.md` 说明了当前推荐的 Rust `tonic` 对照实现模板，后续可在该目录继续推进完整 server/client，并在对外发布时一并附上相同的参数与执行环境；没有 Rust 基线的历史数据请标记为 internal-only / historical，并避免对外宣传。
+
 ## 项目结构
 
 ```text

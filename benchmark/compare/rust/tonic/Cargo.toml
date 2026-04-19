@@ -1,0 +1,22 @@
+[package]
+name = "galay-rpc-tonic-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+tokio-stream = "0.1"
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
+
+[[bin]]
+name = "tonic-bench-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "tonic-bench-client"
+path = "src/bin/client.rs"

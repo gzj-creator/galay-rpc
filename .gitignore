@@ -1,6 +1,7 @@
 # Build
 build/
 cmake-build-*/
+build-codex-*/
 
 # Cache
 .cache/
@@ -21,3 +22,7 @@ cmake-build-*/
 .claude/
 
 .worktrees/
+
+# Rust benchmark baseline local artifacts
+benchmark/compare/rust/*/target/
+benchmark/compare/rust/*/.cargo/
