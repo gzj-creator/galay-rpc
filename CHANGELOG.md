@@ -8,6 +8,15 @@
 
 ## [Unreleased]
 
+## [v1.1.3] - 2026-04-23
+
+### Fixed
+- 在 `include(CTest)` 之前显式钳制 `BUILD_TESTING=OFF`，并保留 `BUILD_TESTS` 兼容别名，避免 `galay-rpc` 默认无意构建测试目标。
+- 补齐 `galay-rpc-config-version.cmake` 的生成与安装，修复带版本约束的 `find_package(galay-rpc ...)` 无法通过包版本匹配的问题。
+
+### Added
+- 新增 `scripts/tests/test_cmake_packaging.sh`，覆盖默认测试开关、兼容别名与安装后包版本探测回归。
+
 ## [v1.1.2] - 2026-04-21
 
 ### Changed

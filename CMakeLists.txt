@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(galay-rpc VERSION 1.1.2 LANGUAGES CXX)
+project(galay-rpc VERSION 1.1.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,8 +7,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 构建选项 / 平台选项
-include(CTest)
 include(cmake/option.cmake)
+include(CTest)
+if(GALAY_RPC_BUILD_TESTS_COMPAT)
+    message(DEPRECATION "BUILD_TESTS is deprecated; use BUILD_TESTING instead.")
+endif()
 
 # 配置 IO 后端
 configure_io_backend()
@@ -152,6 +155,11 @@ install(EXPORT galay-rpc-targets
 
 # 配置文件
 include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/galay-rpc-config-version.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY AnyNewerVersion
+)
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/galay-rpc-config.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/galay-rpc-config.cmake"
@@ -160,5 +168,6 @@ configure_package_config_file(
 
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/galay-rpc-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/galay-rpc-config-version.cmake"
     DESTINATION lib/cmake/galay-rpc
 )
