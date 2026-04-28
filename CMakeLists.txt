@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(galay-rpc VERSION 1.1.3 LANGUAGES CXX)
+project(galay-rpc VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +28,7 @@ if(EXISTS "${GALAY_RPC_SIBLING_KERNEL_CONFIG_DIR}/galay-kernel-config.cmake")
 endif()
 
 # 查找依赖
-find_package(galay-kernel 3.4.4 CONFIG REQUIRED)
+find_package(galay-kernel 4.0.0 CONFIG REQUIRED)
 
 # 收集头文件
 file(GLOB_RECURSE RPC_HEADERS
@@ -98,7 +98,7 @@ if(BUILD_MODULE_EXAMPLES AND GALAY_RPC_MODULES_SUPPORTED AND GALAY_RPC_MODULES_G
         PUBLIC
             FILE_SET CXX_MODULES
             FILES
-                "${CMAKE_CURRENT_SOURCE_DIR}/galay-rpc/module/galay.rpc.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-rpc/module/galay_rpc.cppm"
     )
 endif()
 

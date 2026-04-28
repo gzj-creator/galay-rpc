@@ -13,9 +13,9 @@
 - Do not expand `galay-rpc` with unrelated new RPC features in this pass.
 
 **Current State:**
-- The repository already has local changes in `benchmark/`, `galay-rpc/kernel/RpcStream.h`, and `test/T1-rpc_protocol_test.cpp`.
+- The repository already has local changes in `benchmark/`, `galay-rpc/kernel/rpc_stream.h`, and `test/t1_proto.cpp`.
 - The visible CMake version is stale at `1.0.0`, while the latest git tag is already `v1.0.2`.
-- Rust comparison assets exist locally under `benchmark/compare/` and `scripts/S3-Bench-Rust-Compare.sh`, but those assets should remain uncommitted unless a C++-side script fix is required.
+- Rust comparison assets exist locally under `benchmark/compare/` and `scripts/s3_bench_rust_compare.sh`, but those assets should remain uncommitted unless a C++-side script fix is required.
 
 **Recommended Approach:**
 1. Audit the current diff and separate releasable C++ changes from non-releasable Rust comparison assets and documentation churn.

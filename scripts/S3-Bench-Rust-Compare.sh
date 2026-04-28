@@ -1,5 +1,5 @@
 #!/bin/bash
-# scripts/S3-Bench-Rust-Compare.sh - 同机 C++ vs tonic 基线（B1/B2 + B4/B5）对照脚本
+# scripts/s3_bench_rust_compare.sh - 同机 C++ vs tonic 基线（B1/B2 + B4/B5）对照脚本
 
 set -euo pipefail
 
@@ -7,10 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build}"
 
-CPP_B1_SERVER_BIN="$BUILD_DIR/benchmark/B1-RpcBenchServer"
-CPP_B2_CLIENT_BIN="$BUILD_DIR/benchmark/B2-RpcBenchClient"
-CPP_B4_SERVER_BIN="$BUILD_DIR/benchmark/B4-RpcStreamBenchServer"
-CPP_B5_CLIENT_BIN="$BUILD_DIR/benchmark/B5-RpcStreamBenchClient"
+CPP_B1_SERVER_BIN="$BUILD_DIR/benchmark/b1_rpc"
+CPP_B2_CLIENT_BIN="$BUILD_DIR/benchmark/b2_rpc"
+CPP_B4_SERVER_BIN="$BUILD_DIR/benchmark/b4_stream"
+CPP_B5_CLIENT_BIN="$BUILD_DIR/benchmark/b5_stream"
 
 RR_SERVER_PORT="${SERVER_PORT:-9000}"
 RR_SERVER_IO_COUNT="${SERVER_IO_COUNT:-0}"
@@ -241,7 +241,7 @@ function run_default_rust_baseline() {
 }
 
 echo "Benchmark compare build dir: $BUILD_DIR"
-echo "Note: B3-ServiceDiscoveryBench currently has no fair mainstream Rust mapping; keep it internal-only."
+echo "Note: b3_discovery currently has no fair mainstream Rust mapping; keep it internal-only."
 
 run_cpp_request_response
 run_cpp_stream_path

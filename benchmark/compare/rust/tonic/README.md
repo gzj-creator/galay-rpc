@@ -7,7 +7,7 @@
 - Rust popular baseline: `tonic`
 - 当前支持：`unary`、`client_stream`、`server_stream`、`bidi`、`stream_bench`
 - `stream_bench` 用于映射 `B4/B5` 的公开 stream benchmark 路径
-- `B3-ServiceDiscoveryBench` 仍缺公平 Rust 对照，必须标记为 `internal-only` / `historical`
+- `b3_discovery` 仍缺公平 Rust 对照，必须标记为 `internal-only` / `historical`
 
 ## 产物
 
@@ -44,4 +44,4 @@ galay-rpc/benchmark/compare/rust/tonic/target/release/tonic-bench-client \
   --frame-window 8
 ```
 
-`scripts/S3-Bench-Rust-Compare.sh` 会自动构建并运行 `B1/B2` + `B4/B5` 对照路径。
+`scripts/s3_bench_rust_compare.sh` 会自动构建并运行 `B1/B2` + `B4/B5` 对照路径。

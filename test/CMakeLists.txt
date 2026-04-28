@@ -1,29 +1,29 @@
 if(BUILD_TESTING)
     # 测试结果写入器
-    add_library(test_result_writer INTERFACE)
-    target_include_directories(test_result_writer INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_library(result_writer INTERFACE)
+    target_include_directories(result_writer INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # 协议测试
-    add_executable(T1-RpcProtocolTest T1-rpc_protocol_test.cpp)
-    target_link_libraries(T1-RpcProtocolTest galay-rpc)
+    add_executable(t1_proto t1_proto.cpp)
+    target_link_libraries(t1_proto galay-rpc)
 
     # 集成测试 - 服务端
-    add_executable(T2-RpcServerTest T2-rpc_server_test.cpp)
-    target_link_libraries(T2-RpcServerTest galay-rpc)
+    add_executable(t2_server t2_server.cpp)
+    target_link_libraries(t2_server galay-rpc)
 
     # 集成测试 - 客户端
-    add_executable(T3-RpcClientTest T3-rpc_client_test.cpp)
-    target_link_libraries(T3-RpcClientTest galay-rpc)
+    add_executable(t3_client t3_client.cpp)
+    target_link_libraries(t3_client galay-rpc)
 
     # 编译面测试 - Awaitable facade
-    add_executable(T4-RpcAwaitableSurface T4-rpc_awaitable_surface.cpp)
-    target_link_libraries(T4-RpcAwaitableSurface galay-rpc)
+    add_executable(t4_await t4_await.cpp)
+    target_link_libraries(t4_await galay-rpc)
 
     # 运行时兼容测试 - 0=auto 的 IO scheduler 入口应仍可用
-    add_executable(T5-RpcRuntimeIoSchedulerCompat T5-runtime_io_scheduler_compat.cpp)
-    target_link_libraries(T5-RpcRuntimeIoSchedulerCompat galay-rpc)
+    add_executable(t5_compat t5_compat.cpp)
+    target_link_libraries(t5_compat galay-rpc)
 
-    add_test(NAME RpcProtocolTest COMMAND T1-RpcProtocolTest)
-    add_test(NAME RpcAwaitableSurfaceTest COMMAND T4-RpcAwaitableSurface)
-    add_test(NAME RpcRuntimeIoSchedulerCompatTest COMMAND T5-RpcRuntimeIoSchedulerCompat)
+    add_test(NAME RpcProtocolTest COMMAND t1_proto)
+    add_test(NAME RpcAwaitableSurfaceTest COMMAND t4_await)
+    add_test(NAME RpcRuntimeIoSchedulerCompatTest COMMAND t5_compat)
 endif()

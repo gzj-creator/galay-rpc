@@ -111,8 +111,8 @@ option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
 - `BUILD_MODULE_EXAMPLES` 需要 CMake `>= 3.28` 且使用 `Ninja` / `Visual Studio` 生成器；使用 `Unix Makefiles` 时会在配置阶段自动关闭。
 - `galay-rpc::galay-rpc` 是头文件 `INTERFACE` target；当前仓库没有共享库 / 静态库切换开关。
 - `GALAY_RPC_INSTALL_MODULE_INTERFACE=ON` 时：
-  - 若当前工具链能生成 `galay-rpc-modules`，安装包会导出 `galay-rpc::galay-rpc-modules` 并安装 `galay.rpc.cppm`
-  - 若当前工具链不能生成模块 target，仍会安装原始 `galay.rpc.cppm` 文件，便于消费端自行导入
+  - 若当前工具链能生成 `galay-rpc-modules`，安装包会导出 `galay-rpc::galay-rpc-modules` 并安装 `galay_rpc.cppm`
+  - 若当前工具链不能生成模块 target，仍会安装原始 `galay_rpc.cppm` 文件，便于消费端自行导入
 - `GALAY_RPC_INSTALL_MODULE_INTERFACE=OFF` 时，安装包只保留头文件公开面，不安装 `.cppm`
 - `DISABLE_IOURING=ON` 是 Linux 默认值；如需尝试 `io_uring`，请显式传入 `-DDISABLE_IOURING=OFF` 并确保系统可找到 `liburing`
 
@@ -124,10 +124,10 @@ option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
 
 ```bash
 # 终端 1
-./build/examples/E1-EchoServer 9000
+./build/examples/e1_echo 9000
 
 # 终端 2
-./build/examples/E2-EchoClient 127.0.0.1 9000
+./build/examples/e2_echo 127.0.0.1 9000
 ```
 
 > 该链路现已由 `EchoExampleSmokeTest` 自动验证，不再依赖手工肉眼确认。
@@ -136,10 +136,10 @@ option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
 
 ```bash
 # 终端 1
-./build/examples/E3-StreamServer 9100 1 131072
+./build/examples/e3_stream 9100 1 131072
 
 # 终端 2
-./build/examples/E4-StreamClient 127.0.0.1 9100 200 64
+./build/examples/e4_stream 127.0.0.1 9100 200 64
 ```
 
 > 该 include 链路现已由 `StreamExampleSmokeTest` 自动验证。
@@ -152,12 +152,12 @@ import galay.rpc;
 
 ```bash
 # Echo import 版本
-./build/examples/E1-EchoServerImport 9000
-./build/examples/E2-EchoClientImport 127.0.0.1 9000
+./build/examples/e1_echo_import 9000
+./build/examples/e2_echo_import 127.0.0.1 9000
 
 # Stream import 版本
-./build/examples/E3-StreamServerImport 9100 1 131072
-./build/examples/E4-StreamClientImport 127.0.0.1 9100 200 64
+./build/examples/e3_stream_import 9100 1 131072
+./build/examples/e4_stream_import 127.0.0.1 9100 200 64
 ```
 
 > 当 `BUILD_MODULE_EXAMPLES=ON` 且生成器支持 C++ 模块时，Echo import 链路由 `EchoImportExampleSmokeTest` 自动验证，真实 Stream import 链路由 `StreamImportExampleSmokeTest` 自动验证。
@@ -167,14 +167,14 @@ import galay.rpc;
 本次模块接口已统一为：
 
 - `module;`
-- `#include "galay-rpc/module/ModulePrelude.hpp"`
+- `#include "galay-rpc/module/module_prelude.hpp"`
 - `export module galay.rpc;`
 - `export { #include ... }`
 
 对应文件：
 
-- `galay-rpc/module/galay.rpc.cppm`
-- `galay-rpc/module/ModulePrelude.hpp`
+- `galay-rpc/module/galay_rpc.cppm`
+- `galay-rpc/module/module_prelude.hpp`
 
 推荐构建（Clang 20 + Ninja）：
 
@@ -189,48 +189,48 @@ cmake --build build-mod --target galay-rpc-modules --parallel
 ### 测试
 
 ```bash
-./build/test/T1-RpcProtocolTest
+./build/test/t1_proto
 
 # 终端 1
-./build/test/T2-RpcServerTest 9750
+./build/test/t2_server 9750
 
 # 终端 2
-./build/test/T3-RpcClientTest 127.0.0.1 9750
+./build/test/t3_client 127.0.0.1 9750
 ```
 
 ### RPC 压测（请求/响应）
 
 ```bash
 # 终端 1
-./build/benchmark/B1-RpcBenchServer 9000 0 131072
+./build/benchmark/b1_rpc 9000 0 131072
 
 # 终端 2
-./build/benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m unary
-./build/benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m client_stream
-./build/benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m server_stream
-./build/benchmark/B2-RpcBenchClient -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m bidi
+./build/benchmark/b2_rpc -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m unary
+./build/benchmark/b2_rpc -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m client_stream
+./build/benchmark/b2_rpc -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m server_stream
+./build/benchmark/b2_rpc -h 127.0.0.1 -p 9000 -c 200 -d 5 -s 47 -i 0 -l 4 -m bidi
 ```
 
 ### 真实 Stream 压测（窗口化）
 
 ```bash
 # 终端 1
-./build/benchmark/B4-RpcStreamBenchServer 9100 0 131072
+./build/benchmark/b4_stream 9100 0 131072
 
 # 终端 2
-./build/benchmark/B5-RpcStreamBenchClient -h 127.0.0.1 -p 9100 -c 100 -d 5 -s 128 -f 16 -w 8 -i 0
+./build/benchmark/b5_stream -h 127.0.0.1 -p 9100 -c 100 -d 5 -s 128 -f 16 -w 8 -i 0
 ```
 
 > `RpcBenchmarkSmokeTest` 与 `RpcStreamBenchmarkSmokeTest` 会用较轻负载验证上述 benchmark server/client 命令形态；其中 `0` 表示自动选择 IO scheduler 数量。
 
-`B5-RpcStreamBenchClient` 关键参数：
+`b5_stream` 关键参数：
 
 - `-f`: 每条 stream 的帧数（frames per stream）
 - `-w`: 帧级 pipeline 窗口大小（默认 `1`，推荐压测 `8`）
 
 ## 性能验证状态
 
-- 仓库当前公开了 5 个 benchmark target：`B1-RpcBenchServer`、`B2-RpcBenchClient`、`B3-ServiceDiscoveryBench`、`B4-RpcStreamBenchServer`、`B5-RpcStreamBenchClient`
+- 仓库当前公开了 5 个 benchmark target：`b1_rpc`、`b2_rpc`、`b3_discovery`、`b4_stream`、`b5_stream`
 - 本次文档修复未重新产出新的基准数值，因此 README 不再把旧的 QPS / P99 表当作当前事实陈述
 - 真实 target、参数含义、复现实验命令和历史状态说明见 [docs/05-性能测试.md](docs/05-性能测试.md)
 
@@ -242,7 +242,7 @@ cmake --build build-mod --target galay-rpc-modules --parallel
 
 ### Rust 对标入口
 
-- `scripts/S3-Bench-Rust-Compare.sh` 是基于 `B1-RpcBenchServer` / `B2-RpcBenchClient` 的请求/响应压测流程，默认会在同台机器上启动 C++ 服务端，并执行客户端命令。完成 C++ 端实验后脚本会提示或执行 `RUST_BASELINE_CMD`（可指向 `benchmark/compare/rust/tonic` 中的实现），以确保记录 C++ 与 Rust 的同构 workloads。
+- `scripts/s3_bench_rust_compare.sh` 是基于 `b1_rpc` / `b2_rpc` 的请求/响应压测流程，默认会在同台机器上启动 C++ 服务端，并执行客户端命令。完成 C++ 端实验后脚本会提示或执行 `RUST_BASELINE_CMD`（可指向 `benchmark/compare/rust/tonic` 中的实现），以确保记录 C++ 与 Rust 的同构 workloads。
 - `benchmark/compare/rust/tonic/README.md` 说明了当前推荐的 Rust `tonic` 对照实现模板，后续可在该目录继续推进完整 server/client，并在对外发布时一并附上相同的参数与执行环境；没有 Rust 基线的历史数据请标记为 internal-only / historical，并避免对外宣传。
 
 ## 项目结构
@@ -251,7 +251,7 @@ cmake --build build-mod --target galay-rpc-modules --parallel
 galay-rpc/
 ├── galay-rpc/          # 核心库（header-only）
 │   ├── kernel/         # RpcServer / RpcClient / RpcService / RpcStream / ServiceDiscovery
-│   ├── module/         # C++23 命名模块接口（galay.rpc.cppm）
+│   ├── module/         # C++23 命名模块接口（galay_rpc.cppm）
 │   └── protoc/         # RpcMessage / RpcCodec / RpcError / RpcBase
 ├── examples/
 │   ├── common/         # 示例公共配置

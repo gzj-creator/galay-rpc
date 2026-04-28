@@ -1,21 +1,21 @@
 if(BUILD_BENCHMARKS)
     # 压测服务端
-    add_executable(B1-RpcBenchServer B1-rpc_bench_server.cpp)
-    target_link_libraries(B1-RpcBenchServer galay-rpc)
+    add_executable(b1_rpc b1_rpc.cpp)
+    target_link_libraries(b1_rpc galay-rpc)
 
     # 压测客户端
-    add_executable(B2-RpcBenchClient B2-rpc_bench_client.cpp)
-    target_link_libraries(B2-RpcBenchClient galay-rpc)
+    add_executable(b2_rpc b2_rpc.cpp)
+    target_link_libraries(b2_rpc galay-rpc)
 
     # ServiceDiscovery 压测
-    add_executable(B3-ServiceDiscoveryBench B3-service_discovery_bench.cpp)
-    target_link_libraries(B3-ServiceDiscoveryBench galay-rpc)
+    add_executable(b3_discovery b3_discovery.cpp)
+    target_link_libraries(b3_discovery galay-rpc)
 
     # Stream 压测服务端
-    add_executable(B4-RpcStreamBenchServer B4-rpc_stream_bench_server.cpp)
-    target_link_libraries(B4-RpcStreamBenchServer galay-rpc)
+    add_executable(b4_stream b4_stream.cpp)
+    target_link_libraries(b4_stream galay-rpc)
 
     # Stream 压测客户端
-    add_executable(B5-RpcStreamBenchClient B5-rpc_stream_bench_client.cpp)
-    target_link_libraries(B5-RpcStreamBenchClient galay-rpc)
+    add_executable(b5_stream b5_stream.cpp)
+    target_link_libraries(b5_stream galay-rpc)
 endif()

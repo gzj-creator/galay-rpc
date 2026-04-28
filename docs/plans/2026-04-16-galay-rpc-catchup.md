@@ -14,13 +14,13 @@
 
 **Files:**
 - Modify: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/CMakeLists.txt`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B1-rpc_bench_server.cpp`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B2-rpc_bench_client.cpp`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B3-service_discovery_bench.cpp`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B4-rpc_stream_bench_server.cpp`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B5-rpc_stream_bench_client.cpp`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/galay-rpc/kernel/RpcStream.h`
-- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T1-rpc_protocol_test.cpp`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b1_rpc.cpp`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b2_rpc.cpp`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b3_discovery.cpp`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b4_stream.cpp`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b5_stream.cpp`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/galay-rpc/kernel/rpc_stream.h`
+- Inspect: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/t1_proto.cpp`
 
 **Step 1: Review git status and current diffs**
 
@@ -43,8 +43,8 @@ Expected: Only the intended C++-side release diff remains in scope.
 ### Task 2: Rebuild and verify affected regression paths
 
 **Files:**
-- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/T1-rpc_protocol_test.cpp`
-- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/galay-rpc/kernel/RpcStream.h`
+- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/test/t1_proto.cpp`
+- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/galay-rpc/kernel/rpc_stream.h`
 
 **Step 1: Configure a fresh verification build**
 
@@ -53,12 +53,12 @@ Expected: Configure completes successfully against the local installed `galay-ke
 
 **Step 2: Build the affected targets**
 
-Run: `cmake --build /Users/gongzhijie/Desktop/projects/git/galay-rpc/build-codex-submitcheck --target T1-RpcProtocolTest B1-RpcBenchServer B2-RpcBenchClient B3-ServiceDiscoveryBench B4-RpcStreamBenchServer B5-RpcStreamBenchClient -j8`
+Run: `cmake --build /Users/gongzhijie/Desktop/projects/git/galay-rpc/build-codex-submitcheck --target t1_proto b1_rpc b2_rpc b3_discovery b4_stream b5_stream -j8`
 Expected: All targeted binaries link successfully.
 
 **Step 3: Run the protocol regression**
 
-Run: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-codex-submitcheck/test/T1-RpcProtocolTest`
+Run: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/build-codex-submitcheck/test/t1_proto`
 Expected: PASS or equivalent zero-exit test completion.
 
 **Step 4: If the regression fails, fix the minimal root cause**
@@ -68,15 +68,15 @@ Touch only the owning protocol/stream files. Re-run the same failing test before
 ### Task 3: Re-run same-machine Rust comparison benchmarks
 
 **Files:**
-- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B1-rpc_bench_server.cpp`
-- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B2-rpc_bench_client.cpp`
-- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B4-rpc_stream_bench_server.cpp`
-- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/B5-rpc_stream_bench_client.cpp`
-- Inspect only: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/scripts/S3-Bench-Rust-Compare.sh`
+- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b1_rpc.cpp`
+- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b2_rpc.cpp`
+- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b4_stream.cpp`
+- Modify if needed: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/benchmark/b5_stream.cpp`
+- Inspect only: `/Users/gongzhijie/Desktop/projects/git/galay-rpc/scripts/s3_bench_rust_compare.sh`
 
 **Step 1: Run the public Rust comparison path**
 
-Run: `env ... /Users/gongzhijie/Desktop/projects/git/galay-rpc/scripts/S3-Bench-Rust-Compare.sh /Users/gongzhijie/Desktop/projects/git/galay-rpc/build-codex-submitcheck`
+Run: `env ... /Users/gongzhijie/Desktop/projects/git/galay-rpc/scripts/s3_bench_rust_compare.sh /Users/gongzhijie/Desktop/projects/git/galay-rpc/build-codex-submitcheck`
 Expected: Fresh same-machine C++ versus Rust benchmark output for the public RPC modes.
 
 **Step 2: Compare the headline metrics**

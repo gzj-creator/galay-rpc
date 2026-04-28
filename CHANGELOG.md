@@ -1,12 +1,19 @@
 # CHANGELOG
 
 维护说明：
-- 未打 tag 的改动先写入 `## [Unreleased]`。
-- 需要发版时，从 `Unreleased` 或“自上次 tag 以来”的累计变更整理出新的版本节。
-- 版本号遵循 `major/minor/patch` 规则：大改动升主版本，新功能升次版本，修复与非破坏性维护升修订版本。
-- 推荐标题格式为 `## [vX.Y.Z] - YYYY-MM-DD`，正文按 `Added` / `Changed` / `Fixed` / `Docs` / `Chore` 归纳。
+- 未打 tag 的改动先写入 `
 
 ## [Unreleased]
+
+## [v2.0.0] - 2026-04-29
+
+### Changed
+- 统一源码、头文件、测试、示例与 benchmark 文件命名为 `lower_snake_case`，编号前缀同步使用 `t<number>_`、`e<number>_` 与 `b<number>_` 风格。
+- 同步更新构建脚本、模块入口、示例、测试、文档与脚本中的文件路径引用。
+- 将项目内头文件包含调整为基于公开 include 根或模块根的非相对路径。
+
+### Release
+- 按大版本发布要求提升版本到 `v2.0.0`。
 
 ## [v1.1.3] - 2026-04-23
 

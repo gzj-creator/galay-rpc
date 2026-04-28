@@ -63,7 +63,7 @@ cmake -S "$REPO_ROOT" -B "$DEFAULT_BUILD_DIR" >/dev/null
 assert_file_contains "$DEFAULT_BUILD_DIR/CMakeCache.txt" '^BUILD_TESTING:BOOL=OFF$'
 
 cmake -S "$REPO_ROOT" -B "$ALIAS_BUILD_DIR" -DBUILD_TESTS=ON >/dev/null
-if ! cmake --build "$ALIAS_BUILD_DIR" --target help | grep -E 'test|T1-' >/dev/null; then
+if ! cmake --build "$ALIAS_BUILD_DIR" --target help | grep -E 'test|t1_' >/dev/null; then
     fail "expected BUILD_TESTS=ON to expose test targets"
 fi
 
@@ -80,7 +80,7 @@ cat > "$CONSUMER_SOURCE_DIR/CMakeLists.txt" <<'EOF'
 cmake_minimum_required(VERSION 3.16)
 project(galay_rpc_consumer LANGUAGES CXX)
 
-find_package(galay-rpc 1.1.2 REQUIRED CONFIG)
+find_package(galay-rpc 2.0.0 REQUIRED CONFIG)
 EOF
 
 cmake -S "$CONSUMER_SOURCE_DIR" -B "$CONSUMER_BUILD_DIR" \

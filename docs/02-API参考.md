@@ -1,26 +1,26 @@
 # 02-API参考
 
-> 本页以 `galay-rpc/protoc/*.h`、`galay-rpc/kernel/*.h`、`galay-rpc/module/galay.rpc.cppm` 的当前公开签名为准；若示例与本页冲突，以头文件和模块接口文件为真。
+> 本页以 `galay-rpc/protoc/*.h`、`galay-rpc/kernel/*.h`、`galay-rpc/module/galay_rpc.cppm` 的当前公开签名为准；若示例与本页冲突，以头文件和模块接口文件为真。
 
 ## 公开头文件与模块入口
 
 - 协议层：
-  - `galay-rpc/protoc/RpcBase.h`
-  - `galay-rpc/protoc/RpcMessage.h`
-  - `galay-rpc/protoc/RpcCodec.h`
-  - `galay-rpc/protoc/RpcError.h`
+  - `galay-rpc/protoc/rpc_base.h`
+  - `galay-rpc/protoc/rpc_message.h`
+  - `galay-rpc/protoc/rpc_codec.h`
+  - `galay-rpc/protoc/rpc_error.h`
 - 内核层：
-  - `galay-rpc/kernel/RpcService.h`
-  - `galay-rpc/kernel/RpcAwaitableBase.h`
-  - `galay-rpc/kernel/RpcConn.h`
-  - `galay-rpc/kernel/RpcServer.h`
-  - `galay-rpc/kernel/RpcClient.h`
-  - `galay-rpc/kernel/RpcStream.h`
-  - `galay-rpc/kernel/RpcStreamServer.h`
-  - `galay-rpc/kernel/ServiceDiscovery.h`
+  - `galay-rpc/kernel/rpc_service.h`
+  - `galay-rpc/kernel/rpc_await.h`
+  - `galay-rpc/kernel/rpc_conn.h`
+  - `galay-rpc/kernel/rpc_server.h`
+  - `galay-rpc/kernel/rpc_client.h`
+  - `galay-rpc/kernel/rpc_stream.h`
+  - `galay-rpc/kernel/streamsvc.h`
+  - `galay-rpc/kernel/rpc_discovery.h`
 - 模块入口：
-  - `galay-rpc/module/ModulePrelude.hpp`
-  - `galay-rpc/module/galay.rpc.cppm`
+  - `galay-rpc/module/module_prelude.hpp`
+  - `galay-rpc/module/galay_rpc.cppm`
 
 安装导出与模块边界：
 
@@ -31,19 +31,19 @@
 ## 目录
 
 1. [协议层 (protoc/)](#协议层)
-   - [RpcBase.h - 基础定义](#rpcbaseh)
-   - [RpcMessage.h - 消息定义](#rpcmessageh)
-   - [RpcCodec.h - 编解码器](#rpccodech)
-   - [RpcError.h - 错误处理](#rpcerrorh)
+   - [rpc_base.h - 基础定义](#rpcbaseh)
+   - [rpc_message.h - 消息定义](#rpcmessageh)
+   - [rpc_codec.h - 编解码器](#rpccodech)
+   - [rpc_error.h - 错误处理](#rpcerrorh)
 2. [内核层 (kernel/)](#内核层)
-   - [RpcService.h - 服务定义](#rpcserviceh)
-   - [RpcAwaitableBase.h - Awaitable 基类](#rpcawaitablebaseh)
-   - [RpcConn.h - 连接封装](#rpcconnh)
-   - [RpcServer.h - 服务器](#rpcserverh)
-   - [RpcClient.h - 客户端](#rpcclienth)
-   - [RpcStream.h - 双向流](#rpcstreamh)
-   - [RpcStreamServer.h - 流式服务器](#rpcstreamserverh)
-   - [ServiceDiscovery.h - 服务发现](#servicediscoveryh)
+   - [rpc_service.h - 服务定义](#rpcserviceh)
+   - [rpc_await.h - Awaitable 基类](#rpcawaith)
+   - [rpc_conn.h - 连接封装](#rpcconnh)
+   - [rpc_server.h - 服务器](#rpcserverh)
+   - [rpc_client.h - 客户端](#rpcclienth)
+   - [rpc_stream.h - 双向流](#rpcstreamh)
+   - [streamsvc.h - 流式服务器](#streamsvch)
+   - [rpc_discovery.h - 服务发现](#rpcdiscoveryh)
 
 ---
 
@@ -53,7 +53,7 @@
 
 ## 协议层
 
-### RpcBase.h
+### rpc_base.h
 
 基础常量、字节序辅助、调用模式与 flags 编解码定义。
 
@@ -152,7 +152,7 @@ const char* rpcErrorCodeToString(RpcErrorCode code);
 
 ---
 
-### RpcMessage.h
+### rpc_message.h
 
 消息类定义，包含消息头、请求和响应的序列化/反序列化。
 
@@ -267,7 +267,7 @@ public:
 
 ---
 
-### RpcCodec.h
+### rpc_codec.h
 
 编解码器，提供静态方法解码完整消息。
 
@@ -302,7 +302,7 @@ public:
 
 ---
 
-### RpcError.h
+### rpc_error.h
 
 错误类封装。
 
@@ -335,9 +335,9 @@ public:
 
 ## 内核层
 
-### RpcService.h
+### rpc_service.h
 
-服务定义和上下文。来源：`galay-rpc/kernel/RpcService.h`
+服务定义和上下文。来源：`galay-rpc/kernel/rpc_service.h`
 
 #### RpcMethodHandler
 
@@ -452,11 +452,11 @@ public:
 
 ---
 
-### RpcAwaitableBase.h
+### rpc_await.h
 
-高级 Awaitable 基类。来源：`galay-rpc/kernel/RpcAwaitableBase.h`
+高级 Awaitable 基类。来源：`galay-rpc/kernel/rpc_await.h`
 
-该头文件已随安装公开面一起导出，主要面向需要扩展自定义读写等待体的高级用户；普通调用方通常通过 `RpcConn.h` / `RpcClient.h` / `RpcStream.h` 间接使用它。
+该头文件已随安装公开面一起导出，主要面向需要扩展自定义读写等待体的高级用户；普通调用方通常通过 `rpc_conn.h` / `rpc_client.h` / `rpc_stream.h` 间接使用它。
 
 #### `detail` 辅助函数
 
@@ -517,7 +517,7 @@ public:
 
 ---
 
-### RpcConn.h
+### rpc_conn.h
 
 连接封装，使用 RingBuffer + readv/writev 实现高效 IO。
 
@@ -642,7 +642,7 @@ while (true) {
 
 ---
 
-### RpcServer.h
+### rpc_server.h
 
 RPC 服务器，内置 Runtime。
 
@@ -660,7 +660,7 @@ struct RpcServerConfig {
 };
 ```
 
-`GALAY_RUNTIME_SCHEDULER_COUNT_AUTO` 定义在 `galay-kernel/kernel/Runtime.h`。这里的默认值与上游 Runtime 对齐：`0` 不是“自动”，而是“禁用对应 scheduler”。
+`GALAY_RUNTIME_SCHEDULER_COUNT_AUTO` 定义在 `galay-kernel/kernel/runtime.h`。这里的默认值与上游 Runtime 对齐：`0` 不是“自动”，而是“禁用对应 scheduler”。
 
 #### RpcServerBuilder
 
@@ -735,7 +735,7 @@ server.stop();
 
 ---
 
-### RpcClient.h
+### rpc_client.h
 
 RPC 客户端，支持异步调用和超时。
 
@@ -832,7 +832,7 @@ public:
 
 #### `RecvRpcResponseChainAwaitable<SocketType>`
 
-`RpcClient.h` 中公开的高级响应读取上下文，主要供扩展点、测试和自定义调度桥接使用，不是常规业务层首选入口。
+`rpc_client.h` 中公开的高级响应读取上下文，主要供扩展点、测试和自定义调度桥接使用，不是常规业务层首选入口。
 
 ```cpp
 template<typename SocketType>
@@ -903,7 +903,7 @@ Coroutine example(RpcClient& client) {
 
 ---
 
-### RpcStream.h
+### rpc_stream.h
 
 双向流支持。
 
@@ -1054,7 +1054,7 @@ Coroutine biStreamExample(RpcStream& stream) {
 }
 ```
 
-### RpcStreamServer.h
+### streamsvc.h
 
 流式服务器，按 `STREAM_INIT` 的 `service/method` 路由到 `RpcService::registerStreamMethod`。
 
@@ -1098,7 +1098,7 @@ public:
 
 ---
 
-### ServiceDiscovery.h
+### rpc_discovery.h
 
 服务发现模块，使用 C++23 Concept 约束。
 
@@ -1304,8 +1304,8 @@ ServiceDiscoveryClient<LocalServiceRegistry, WeightedRandomSelector> client2(reg
 
 ## 交叉验证入口
 
-- include 示例：`examples/include/E1-echo_server.cc`、`examples/include/E2-echo_client.cc`、`examples/include/E3-stream_server.cc`、`examples/include/E4-stream_client.cc`
-- import 示例：`examples/import/E1-echo_server.cc`、`examples/import/E2-echo_client.cc`、`examples/import/E3-stream_server.cc`、`examples/import/E4-stream_client.cc`
-- 协议测试：`test/T1-rpc_protocol_test.cpp`
-- server / client 测试：`test/T2-rpc_server_test.cpp`、`test/T3-rpc_client_test.cpp`
+- include 示例：`examples/include/e1_echo.cc`、`examples/include/e2_echo.cc`、`examples/include/e3_stream.cc`、`examples/include/e4_stream.cc`
+- import 示例：`examples/import/e1_echo.cc`、`examples/import/e2_echo.cc`、`examples/import/e3_stream.cc`、`examples/import/e4_stream.cc`
+- 协议测试：`test/t1_proto.cpp`
+- server / client 测试：`test/t2_server.cpp`、`test/t3_client.cpp`
 - smoke 脚本：`test/run_rpc_integration_smoke.sh`、`test/run_echo_example_smoke.sh`、`test/run_stream_example_smoke.sh`
