@@ -26,3 +26,4 @@ build-codex-*/
 # Rust benchmark baseline local artifacts
 benchmark/compare/rust/*/target/
 benchmark/compare/rust/*/.cargo/
+benchmark/compare/
