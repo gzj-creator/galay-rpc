@@ -38,3 +38,13 @@
 - Git Tag：`v2.0.1`
 - 自述摘要：
   - 移除 `benchmark/compare` 目录并收紧忽略规则，避免误提交对比基准测试代码与构建产物。
+
+## v2.0.2 - 2026-05-18
+
+- 版本级别：小版本（patch）
+- Git 提交消息：`chore: 统一 CMake 导出文件命名`
+- Git Tag：`v2.0.2`
+- 自述摘要：
+  - 将安装导出的 CMake targets 文件改为 `galayRpcConfigTargets.cmake`，并同步 `galay-rpc-config.cmake` 的 include 路径。
+  - packaging 回归脚本中的 fake `galay-kernel` targets 文件同步改为 `galayKernelConfigTargets.cmake`，覆盖新的依赖导出命名。
+  - 将 CMake project 版本提升到 `2.0.2`，确保源码版本元数据、tag 与发布记录一致。

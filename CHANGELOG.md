@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+## [v2.0.2] - 2026-05-18
+
+### Changed
+- 将安装导出的 CMake targets 文件改为 `galayRpcConfigTargets.cmake`，同步 package config 的 include 路径。
+- packaging 回归脚本中的 fake `galay-kernel` targets 文件同步改为 `galayKernelConfigTargets.cmake`。
+- 将 CMake project 版本提升到 `2.0.2`，对齐本次发布 tag。
+
+
 ## [v2.0.1] - 2026-05-11
 
 ### Chore

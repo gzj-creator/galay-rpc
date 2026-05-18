@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(galay-rpc VERSION 2.0.0 LANGUAGES CXX)
+project(galay-rpc VERSION 2.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -148,7 +148,7 @@ else()
 endif()
 
 install(EXPORT galay-rpc-targets
-    FILE galay-rpc-targets.cmake
+    FILE galayRpcConfigTargets.cmake
     NAMESPACE galay-rpc::
     DESTINATION lib/cmake/galay-rpc
 )

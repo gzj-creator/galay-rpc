@@ -36,14 +36,14 @@ CONSUMER_BUILD_DIR="$TMP_ROOT/consumer-build"
 
 mkdir -p "$FAKE_KERNEL_PREFIX/lib/cmake/galay-kernel" "$CONSUMER_SOURCE_DIR"
 
-cat > "$FAKE_KERNEL_PREFIX/lib/cmake/galay-kernel/galay-kernel-targets.cmake" <<'EOF'
+cat > "$FAKE_KERNEL_PREFIX/lib/cmake/galay-kernel/galayKernelConfigTargets.cmake" <<'EOF'
 if(NOT TARGET galay-kernel::galay-kernel)
     add_library(galay-kernel::galay-kernel INTERFACE IMPORTED)
 endif()
 EOF
 
 cat > "$FAKE_KERNEL_PREFIX/lib/cmake/galay-kernel/galay-kernel-config.cmake" <<'EOF'
-include("${CMAKE_CURRENT_LIST_DIR}/galay-kernel-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/galayKernelConfigTargets.cmake")
 EOF
 
 cat > "$FAKE_KERNEL_PREFIX/lib/cmake/galay-kernel/galay-kernel-config-version.cmake" <<'EOF'
