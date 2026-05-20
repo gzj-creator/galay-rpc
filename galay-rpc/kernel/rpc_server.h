@@ -24,6 +24,7 @@
 #ifndef GALAY_RPC_SERVER_H
 #define GALAY_RPC_SERVER_H
 
+#include "galay-rpc/common/rpc_log.h"
 #include "rpc_service.h"
 #include "rpc_conn.h"
 #include "galay-rpc/utils/runtime_compat.h"
@@ -127,12 +128,18 @@ public:
      * @brief 启动服务器
      */
     void start() {
+        RPC_LOG_INFO("[server] [start]",
+                     "host={} port={} backlog={}",
+                     m_config.host,
+                     m_config.port,
+                     m_config.backlog);
         m_running.store(true, std::memory_order_release);
         m_runtime.start();
 
         auto* scheduler = m_runtime.getNextIOScheduler();
         if (!scheduleTask(scheduler, acceptLoop())) {
             m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule accept loop");
+            RPC_LOG_ERROR("[server] [schedule] [fail]", "accept-loop");
             m_running.store(false, std::memory_order_release);
             m_runtime.stop();
         }
@@ -143,6 +150,7 @@ public:
      */
     void stop() {
         if (m_running.exchange(false, std::memory_order_acq_rel)) {
+            RPC_LOG_INFO("[server] [stop]", "port={}", m_config.port);
             m_runtime.stop();
         }
     }
@@ -304,11 +312,17 @@ private:
         auto reuse_addr_result = listener.option().handleReuseAddr();
         if (!reuse_addr_result) {
             m_last_error = RpcError::from(reuse_addr_result.error());
+            RPC_LOG_ERROR("[server] [socket] [reuseaddr-fail]",
+                          "error={}",
+                          m_last_error->message());
             co_return;
         }
         auto non_block_result = listener.option().handleNonBlock();
         if (!non_block_result) {
             m_last_error = RpcError::from(non_block_result.error());
+            RPC_LOG_ERROR("[server] [socket] [nonblock-fail]",
+                          "error={}",
+                          m_last_error->message());
             co_return;
         }
 
@@ -316,12 +330,22 @@ private:
         auto bind_result = listener.bind(host);
         if (!bind_result) {
             m_last_error = RpcError::from(bind_result.error());
+            RPC_LOG_ERROR("[server] [bind] [fail]",
+                          "host={} port={} error={}",
+                          m_config.host,
+                          m_config.port,
+                          m_last_error->message());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
             m_last_error = RpcError::from(listen_result.error());
+            RPC_LOG_ERROR("[server] [listen] [fail]",
+                          "port={} backlog={} error={}",
+                          m_config.port,
+                          m_config.backlog,
+                          m_last_error->message());
             co_return;
         }
 
@@ -330,6 +354,9 @@ private:
             auto accept_result = co_await listener.accept(&client_host);
             if (!accept_result) {
                 m_last_error = RpcError::from(accept_result.error());
+                RPC_LOG_WARN("[server] [accept] [fail]",
+                             "error={}",
+                             m_last_error->message());
                 continue;
             }
 
@@ -337,11 +364,15 @@ private:
             auto* scheduler = m_runtime.getNextIOScheduler();
             if (!scheduleTask(scheduler, handleConnection(accept_result.value()))) {
                 m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule connection handler");
+                RPC_LOG_ERROR("[server] [schedule] [fail]", "connection-handler");
                 GHandle accepted = accept_result.value();
                 RpcConn conn(accepted, RpcReaderSetting{}, RpcWriterSetting{}, m_config.ring_buffer_size);
                 auto close_result = co_await conn.close();
                 if (!close_result) {
                     m_last_error = RpcError::from(close_result.error());
+                    RPC_LOG_WARN("[server] [close] [fail]",
+                                 "error={}",
+                                 m_last_error->message());
                 }
             }
         }
@@ -349,6 +380,9 @@ private:
         auto close_result = co_await listener.close();
         if (!close_result) {
             m_last_error = RpcError::from(close_result.error());
+            RPC_LOG_WARN("[server] [listener] [close-fail]",
+                         "error={}",
+                         m_last_error->message());
         }
         co_return;
     }
@@ -375,9 +409,16 @@ private:
             if (!result) {
                 // 错误，关闭连接
                 m_last_error = result.error();
+                RPC_LOG_WARN("[server] [recv] [fail]",
+                             "code={} error={}",
+                             static_cast<int>(m_last_error->code()),
+                             m_last_error->message());
                 auto close_result = co_await conn.close();
                 if (!close_result) {
                     m_last_error = RpcError::from(close_result.error());
+                    RPC_LOG_WARN("[server] [close] [fail]",
+                                 "error={}",
+                                 m_last_error->message());
                 }
                 co_return;
             }
@@ -398,6 +439,12 @@ private:
                 auto resolve_result = resolveMethodHandler(request);
                 if (!resolve_result.has_value()) {
                     response.errorCode(resolve_result.error());
+                    RPC_LOG_WARN("[server] [route] [not-found]",
+                                 "service={} method={} mode={} code={}",
+                                 request.serviceName(),
+                                 request.methodName(),
+                                 static_cast<int>(request.callMode()),
+                                 static_cast<int>(resolve_result.error()));
                 } else {
                     handler = resolve_result.value();
                     updateRouteCache(request,
@@ -418,9 +465,17 @@ private:
             result = co_await writer.sendResponse(response);
             if (!result) {
                 m_last_error = result.error();
+                RPC_LOG_WARN("[server] [send] [fail]",
+                             "request_id={} code={} error={}",
+                             response.requestId(),
+                             static_cast<int>(m_last_error->code()),
+                             m_last_error->message());
                 auto close_result = co_await conn.close();
                 if (!close_result) {
                     m_last_error = RpcError::from(close_result.error());
+                    RPC_LOG_WARN("[server] [close] [fail]",
+                                 "error={}",
+                                 m_last_error->message());
                 }
                 co_return;
             }
@@ -429,6 +484,9 @@ private:
         auto close_result = co_await conn.close();
         if (!close_result) {
             m_last_error = RpcError::from(close_result.error());
+            RPC_LOG_WARN("[server] [close] [fail]",
+                         "error={}",
+                         m_last_error->message());
         }
         co_return;
     }

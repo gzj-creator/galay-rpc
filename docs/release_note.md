@@ -48,3 +48,14 @@
   - 将安装导出的 CMake targets 文件改为 `galayRpcConfigTargets.cmake`，并同步 `galay-rpc-config.cmake` 的 include 路径。
   - packaging 回归脚本中的 fake `galay-kernel` targets 文件同步改为 `galayKernelConfigTargets.cmake`，覆盖新的依赖导出命名。
   - 将 CMake project 版本提升到 `2.0.2`，确保源码版本元数据、tag 与发布记录一致。
+
+## v2.1.0 - 2026-05-20
+
+- 版本级别：中版本（minor）
+- Git 提交消息：`feat: 增加 rpc 库级 BaseLogger 日志入口`
+- Git Tag：`v2.1.0`
+- 自述摘要：
+  - 新增 `galay::rpc::log::set/get`，用户可只为 `galay-rpc` 设置 `BaseLogger`，不会影响其他 galay 库日志。
+  - 新增 `RPC_LOG_*` 与 `RPC_LOG_ENABLED`，并在客户端调用、服务端监听/调度/路由、流式服务错误路径增加按级别过滤的日志埋点。
+  - 将 `galay-kernel` 依赖约束同步提升到 `5.0.0`，项目版本提升到 `2.1.0`。
+  - 新增日志入口测试，覆盖空 logger 与级别过滤时不执行日志参数构造的行为。

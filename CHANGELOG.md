@@ -1,9 +1,22 @@
 # CHANGELOG
 
 维护说明：
-- 未打 tag 的改动先写入 `
+- 未打 tag 的改动先写入 `## [Unreleased]`。
+- 发版时将累计变更整理到 `## [vX.Y.Z] - YYYY-MM-DD`，并同步 `docs/release_note.md`。
+- 版本升级规则：破坏性或架构大改升主版本，新功能升次版本，修复或维护升修订版本。
 
 ## [Unreleased]
+
+## [v2.1.0] - 2026-05-20
+
+### Added
+- 新增 `galay::rpc::log::set/get` 库级日志入口，使用 `galay-kernel` 的 `BaseLogger` 按库隔离启用 RPC 日志。
+- 新增 `RPC_LOG_*` 与 `RPC_LOG_ENABLED` 宏，并在客户端调用、服务端监听/调度/路由、流式服务错误路径增加日志埋点。
+- 新增 `RpcLibraryLoggerTest`，验证未设置 logger 或被日志级别过滤时不会执行日志参数构造。
+
+### Changed
+- 将 `galay-kernel` 依赖约束提升到 `5.0.0`，并同步 CMake package 导出的 `find_dependency` 版本。
+- 将项目版本提升到 `2.1.0`，与本次发布 tag 对齐。
 
 ## [v2.0.2] - 2026-05-18
 

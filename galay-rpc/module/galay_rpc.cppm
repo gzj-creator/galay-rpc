@@ -5,6 +5,8 @@ module;
 export module galay.rpc;
 
 export {
+#include "galay-rpc/common/rpc_log.h"
+
 #include "galay-rpc/protoc/rpc_base.h"
 #include "galay-rpc/protoc/rpc_error.h"
 #include "galay-rpc/protoc/rpc_message.h"

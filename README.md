@@ -116,6 +116,18 @@ option(DISABLE_IOURING "Disable io_uring and use epoll on Linux" ON)
 - `GALAY_RPC_INSTALL_MODULE_INTERFACE=OFF` 时，安装包只保留头文件公开面，不安装 `.cppm`
 - `DISABLE_IOURING=ON` 是 Linux 默认值；如需尝试 `io_uring`，请显式传入 `-DDISABLE_IOURING=OFF` 并确保系统可找到 `liburing`
 
+## 库级日志
+
+`galay-rpc` 使用独立的库级日志入口，用户只需要为 RPC 库设置 logger：
+
+```cpp
+#include "galay-rpc/common/rpc_log.h"
+
+galay::rpc::log::set(std::make_unique<MyLogger>());
+```
+
+`MyLogger` 继承 `galay::kernel::BaseLogger`。未设置 logger 时，`RPC_LOG_*` 埋点不会执行 `std::format`；日志级别低于 `minLevel()` 时也不会格式化消息。只设置 `galay::rpc::log::set()` 不会启用 `galay::kernel`、`galay::ssl`、`galay::http` 或其他库的日志。
+
 ## 快速示例
 
 以下命令均在 `galay-rpc` 仓库根目录执行；终端 1 需要保持运行。

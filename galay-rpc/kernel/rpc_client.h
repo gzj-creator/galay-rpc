@@ -29,6 +29,7 @@
 #ifndef GALAY_RPC_CLIENT_H
 #define GALAY_RPC_CLIENT_H
 
+#include "galay-rpc/common/rpc_log.h"
 #include "rpc_conn.h"
 #include "rpc_stream.h"
 #include "galay-rpc/protoc/rpc_error.h"
@@ -213,6 +214,7 @@ public:
      * @return 连接等待体
      */
     ConnectAwaitable connect(const std::string& host, uint16_t port) {
+        RPC_LOG_INFO("[client] [connect]", "host={} port={}", host, port);
         m_socket = std::make_unique<SocketType>(IPType::IPV4);
 
         const size_t ring_buffer_size = m_config.ring_buffer_size == 0
@@ -253,6 +255,10 @@ public:
                                                   const char* payload,
                                                   size_t payload_len) {
         if (!m_socket || !m_ring_buffer) {
+            RPC_LOG_WARN("[client] [call] [not-connected]",
+                         "service={} method={}",
+                         service,
+                         method);
             co_return RpcCallResult(std::unexpected(
                 RpcError(RpcErrorCode::CONNECTION_CLOSED, "Client is not connected")));
         }
@@ -268,6 +274,13 @@ public:
         auto writer = getWriter();
         auto send_result = co_await writer.sendRequest(request);
         if (!send_result.has_value()) {
+            RPC_LOG_WARN("[client] [send] [fail]",
+                         "service={} method={} request_id={} code={} error={}",
+                         service,
+                         method,
+                         req_id,
+                         static_cast<int>(send_result.error().code()),
+                         send_result.error().message());
             co_return RpcCallResult(std::unexpected(send_result.error()));
         }
 
@@ -275,15 +288,30 @@ public:
         RpcResponse response;
         auto recv_result = co_await reader.getResponse(response);
         if (!recv_result.has_value()) {
+            RPC_LOG_WARN("[client] [recv] [fail]",
+                         "service={} method={} request_id={} code={} error={}",
+                         service,
+                         method,
+                         req_id,
+                         static_cast<int>(recv_result.error().code()),
+                         recv_result.error().message());
             co_return RpcCallResult(std::unexpected(recv_result.error()));
         }
 
         if (response.requestId() != request.requestId()) {
+            RPC_LOG_ERROR("[client] [recv] [mismatch-id]",
+                          "expected={} actual={}",
+                          request.requestId(),
+                          response.requestId());
             co_return RpcCallResult(std::unexpected(
                 RpcError(RpcErrorCode::INVALID_RESPONSE, "Mismatched response request id")));
         }
 
         if (response.callMode() != request.callMode()) {
+            RPC_LOG_ERROR("[client] [recv] [mismatch-mode]",
+                          "expected={} actual={}",
+                          static_cast<int>(request.callMode()),
+                          static_cast<int>(response.callMode()));
             co_return RpcCallResult(std::unexpected(
                 RpcError(RpcErrorCode::INVALID_RESPONSE, "Mismatched response call mode")));
         }
@@ -360,6 +388,11 @@ public:
                                                                      const std::string& service = {},
                                                                      const std::string& method = {}) {
         if (!m_socket || !m_ring_buffer) {
+            RPC_LOG_WARN("[client] [stream] [not-connected]",
+                         "stream_id={} service={} method={}",
+                         stream_id,
+                         service,
+                         method);
             return std::unexpected(RpcError(RpcErrorCode::CONNECTION_CLOSED,
                                             "Client is not connected"));
         }

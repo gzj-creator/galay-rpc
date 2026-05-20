@@ -11,6 +11,7 @@
 #ifndef GALAY_RPC_STREAMSVC_H
 #define GALAY_RPC_STREAMSVC_H
 
+#include "galay-rpc/common/rpc_log.h"
 #include "rpc_service.h"
 #include "rpc_stream.h"
 #include "galay-rpc/utils/runtime_compat.h"
@@ -104,11 +105,17 @@ public:
     }
 
     void start() {
+        RPC_LOG_INFO("[stream-server] [start]",
+                     "host={} port={} backlog={}",
+                     m_config.host,
+                     m_config.port,
+                     m_config.backlog);
         m_running.store(true, std::memory_order_release);
         m_runtime.start();
         auto* scheduler = m_runtime.getNextIOScheduler();
         if (!scheduleTask(scheduler, acceptLoop())) {
             m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule stream accept loop");
+            RPC_LOG_ERROR("[stream-server] [schedule] [fail]", "accept-loop");
             m_running.store(false, std::memory_order_release);
             m_runtime.stop();
         }
@@ -116,6 +123,7 @@ public:
 
     void stop() {
         if (m_running.exchange(false, std::memory_order_acq_rel)) {
+            RPC_LOG_INFO("[stream-server] [stop]", "port={}", m_config.port);
             m_runtime.stop();
         }
     }
@@ -152,12 +160,18 @@ private:
         auto reuse_addr_result = listener.option().handleReuseAddr();
         if (!reuse_addr_result) {
             m_last_error = RpcError::from(reuse_addr_result.error());
+            RPC_LOG_ERROR("[stream-server] [socket] [reuseaddr-fail]",
+                          "error={}",
+                          m_last_error->message());
             co_return;
         }
 
         auto non_block_result = listener.option().handleNonBlock();
         if (!non_block_result) {
             m_last_error = RpcError::from(non_block_result.error());
+            RPC_LOG_ERROR("[stream-server] [socket] [nonblock-fail]",
+                          "error={}",
+                          m_last_error->message());
             co_return;
         }
 
@@ -165,12 +179,22 @@ private:
         auto bind_result = listener.bind(host);
         if (!bind_result) {
             m_last_error = RpcError::from(bind_result.error());
+            RPC_LOG_ERROR("[stream-server] [bind] [fail]",
+                          "host={} port={} error={}",
+                          m_config.host,
+                          m_config.port,
+                          m_last_error->message());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
             m_last_error = RpcError::from(listen_result.error());
+            RPC_LOG_ERROR("[stream-server] [listen] [fail]",
+                          "port={} backlog={} error={}",
+                          m_config.port,
+                          m_config.backlog,
+                          m_last_error->message());
             co_return;
         }
 
@@ -179,16 +203,23 @@ private:
             auto accept_result = co_await listener.accept(&client_host);
             if (!accept_result) {
                 m_last_error = RpcError::from(accept_result.error());
+                RPC_LOG_WARN("[stream-server] [accept] [fail]",
+                             "error={}",
+                             m_last_error->message());
                 continue;
             }
 
             auto* scheduler = m_runtime.getNextIOScheduler();
             if (!scheduleTask(scheduler, handleConnection(accept_result.value()))) {
                 m_last_error = RpcError(RpcErrorCode::INTERNAL_ERROR, "Failed to schedule stream connection handler");
+                RPC_LOG_ERROR("[stream-server] [schedule] [fail]", "connection-handler");
                 TcpSocket socket(accept_result.value());
                 auto close_result = co_await socket.close();
                 if (!close_result) {
                     m_last_error = RpcError::from(close_result.error());
+                    RPC_LOG_WARN("[stream-server] [close] [fail]",
+                                 "error={}",
+                                 m_last_error->message());
                 }
             }
         }
@@ -196,6 +227,9 @@ private:
         auto close_result = co_await listener.close();
         if (!close_result) {
             m_last_error = RpcError::from(close_result.error());
+            RPC_LOG_WARN("[stream-server] [listener] [close-fail]",
+                         "error={}",
+                         m_last_error->message());
         }
         co_return;
     }
@@ -205,9 +239,15 @@ private:
         auto non_block_result = socket.option().handleNonBlock();
         if (!non_block_result) {
             m_last_error = RpcError::from(non_block_result.error());
+            RPC_LOG_ERROR("[stream-server] [socket] [client-nonblock-fail]",
+                          "error={}",
+                          m_last_error->message());
             auto close_result = co_await socket.close();
             if (!close_result) {
                 m_last_error = RpcError::from(close_result.error());
+                RPC_LOG_WARN("[stream-server] [close] [fail]",
+                             "error={}",
+                             m_last_error->message());
             }
             co_return;
         }
@@ -220,9 +260,16 @@ private:
             auto recv_result = co_await reader.getMessage(init_frame);
             if (!recv_result.has_value()) {
                 m_last_error = recv_result.error();
+                RPC_LOG_WARN("[stream-server] [recv] [fail]",
+                             "code={} error={}",
+                             static_cast<int>(m_last_error->code()),
+                             m_last_error->message());
                 auto close_result = co_await socket.close();
                 if (!close_result) {
                     m_last_error = RpcError::from(close_result.error());
+                    RPC_LOG_WARN("[stream-server] [close] [fail]",
+                                 "error={}",
+                                 m_last_error->message());
                 }
                 co_return;
             }
@@ -233,12 +280,23 @@ private:
             if (init_frame.messageType() != RpcMessageType::STREAM_INIT) {
                 m_last_error = RpcError(RpcErrorCode::INVALID_REQUEST,
                                         "Expected STREAM_INIT as first frame");
+                RPC_LOG_WARN("[stream-server] [protocol] [invalid-first-frame]",
+                             "stream_id={} type={}",
+                             stream_id,
+                             static_cast<int>(init_frame.messageType()));
                 auto cancel_result = co_await stream.sendCancel();
                 if (!cancel_result.has_value()) {
                     m_last_error = cancel_result.error();
+                    RPC_LOG_WARN("[stream-server] [cancel] [fail]",
+                                 "stream_id={} error={}",
+                                 stream_id,
+                                 m_last_error->message());
                     auto close_result = co_await socket.close();
                     if (!close_result) {
                         m_last_error = RpcError::from(close_result.error());
+                        RPC_LOG_WARN("[stream-server] [close] [fail]",
+                                     "error={}",
+                                     m_last_error->message());
                     }
                     co_return;
                 }
@@ -249,12 +307,23 @@ private:
             if (!init_req.deserializeBody(init_frame.payload().data(), init_frame.payload().size())) {
                 m_last_error = RpcError(RpcErrorCode::INVALID_REQUEST,
                                         "Failed to parse stream init body");
+                RPC_LOG_WARN("[stream-server] [protocol] [parse-init-fail]",
+                             "stream_id={} payload_size={}",
+                             stream_id,
+                             init_frame.payload().size());
                 auto cancel_result = co_await stream.sendCancel();
                 if (!cancel_result.has_value()) {
                     m_last_error = cancel_result.error();
+                    RPC_LOG_WARN("[stream-server] [cancel] [fail]",
+                                 "stream_id={} error={}",
+                                 stream_id,
+                                 m_last_error->message());
                     auto close_result = co_await socket.close();
                     if (!close_result) {
                         m_last_error = RpcError::from(close_result.error());
+                        RPC_LOG_WARN("[stream-server] [close] [fail]",
+                                     "error={}",
+                                     m_last_error->message());
                     }
                     co_return;
                 }
@@ -264,12 +333,25 @@ private:
             auto handler_result = resolveStreamHandler(init_req);
             if (!handler_result.has_value()) {
                 m_last_error = RpcError(handler_result.error());
+                RPC_LOG_WARN("[stream-server] [route] [not-found]",
+                             "stream_id={} service={} method={} code={}",
+                             stream_id,
+                             init_req.serviceName(),
+                             init_req.methodName(),
+                             static_cast<int>(handler_result.error()));
                 auto cancel_result = co_await stream.sendCancel();
                 if (!cancel_result.has_value()) {
                     m_last_error = cancel_result.error();
+                    RPC_LOG_WARN("[stream-server] [cancel] [fail]",
+                                 "stream_id={} error={}",
+                                 stream_id,
+                                 m_last_error->message());
                     auto close_result = co_await socket.close();
                     if (!close_result) {
                         m_last_error = RpcError::from(close_result.error());
+                        RPC_LOG_WARN("[stream-server] [close] [fail]",
+                                     "error={}",
+                                     m_last_error->message());
                     }
                     co_return;
                 }
@@ -281,9 +363,16 @@ private:
             auto send_result = co_await stream.sendInitAck();
             if (!send_result.has_value()) {
                 m_last_error = send_result.error();
+                RPC_LOG_WARN("[stream-server] [send-init-ack] [fail]",
+                             "stream_id={} error={}",
+                             stream_id,
+                             m_last_error->message());
                 auto close_result = co_await socket.close();
                 if (!close_result) {
                     m_last_error = RpcError::from(close_result.error());
+                    RPC_LOG_WARN("[stream-server] [close] [fail]",
+                                 "error={}",
+                                 m_last_error->message());
                 }
                 co_return;
             }
@@ -295,6 +384,9 @@ private:
         auto close_result = co_await socket.close();
         if (!close_result) {
             m_last_error = RpcError::from(close_result.error());
+            RPC_LOG_WARN("[stream-server] [close] [fail]",
+                         "error={}",
+                         m_last_error->message());
         }
         co_return;
     }

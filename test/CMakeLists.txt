@@ -23,7 +23,12 @@ if(BUILD_TESTING)
     add_executable(t5_compat t5_compat.cpp)
     target_link_libraries(t5_compat galay-rpc)
 
+    # RPC 库级日志入口测试
+    add_executable(t6_rpc_log t6_rpc_log.cpp)
+    target_link_libraries(t6_rpc_log galay-rpc)
+
     add_test(NAME RpcProtocolTest COMMAND t1_proto)
     add_test(NAME RpcAwaitableSurfaceTest COMMAND t4_await)
     add_test(NAME RpcRuntimeIoSchedulerCompatTest COMMAND t5_compat)
+    add_test(NAME RpcLibraryLoggerTest COMMAND t6_rpc_log)
 endif()
