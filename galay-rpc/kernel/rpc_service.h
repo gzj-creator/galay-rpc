@@ -43,15 +43,20 @@ class RpcContext;
 /**
  * @brief RPC方法处理函数类型
  */
+/// @brief RPC方法处理函数类型
 using RpcMethodHandler = std::function<Coroutine(RpcContext&)>;
+/// @brief RPC流处理函数类型
 using RpcStreamHandler = std::function<Coroutine(RpcStream&)>;
 
 /**
  * @brief RPC服务基类
+ *
+ * @details 提供RPC服务的基类和方法注册机制，支持一元调用、客户端流、
+ *          服务端流和双向流四种调用模式，以及独立的流会话模式。
  */
 class RpcService {
 public:
-    static constexpr size_t kStreamRpcModeCount = 3;
+    static constexpr size_t kStreamRpcModeCount = 3;  ///< 流式RPC模式数量
 
     /**
      * @brief 构造函数
@@ -80,6 +85,12 @@ public:
         return nullptr;
     }
 
+    /**
+     * @brief 查找方法处理器（带调用模式）
+     * @param method 方法名
+     * @param mode 调用模式
+     * @return 方法处理器，未找到返回nullptr
+     */
     RpcMethodHandler* findMethod(const std::string& method, RpcCallMode mode) {
         if (mode == RpcCallMode::UNARY) {
             return findMethod(method);
@@ -97,6 +108,11 @@ public:
         return &it->second.handlers[mode_idx];
     }
 
+    /**
+     * @brief 查找流会话处理器
+     * @param method 方法名
+     * @return 流处理器，未找到返回nullptr
+     */
     RpcStreamHandler* findStreamMethod(const std::string& method) {
         auto it = m_stream_session_methods.find(method);
         if (it != m_stream_session_methods.end()) {
@@ -147,46 +163,65 @@ protected:
         registerUnaryMethod(name, method);
     }
 
+    /// @brief 注册一元方法
     void registerUnaryMethod(std::string_view name, RpcMethodHandler handler) {
         registerMethodByMode(name, RpcCallMode::UNARY, std::move(handler));
     }
 
+    /// @brief 注册客户端流方法
     void registerClientStreamingMethod(std::string_view name, RpcMethodHandler handler) {
         registerMethodByMode(name, RpcCallMode::CLIENT_STREAMING, std::move(handler));
     }
 
+    /// @brief 注册服务端流方法
     void registerServerStreamingMethod(std::string_view name, RpcMethodHandler handler) {
         registerMethodByMode(name, RpcCallMode::SERVER_STREAMING, std::move(handler));
     }
 
+    /// @brief 注册双向流方法
     void registerBidiStreamingMethod(std::string_view name, RpcMethodHandler handler) {
         registerMethodByMode(name, RpcCallMode::BIDI_STREAMING, std::move(handler));
     }
 
+    /// @brief 注册一元成员方法
     template<typename T>
     void registerUnaryMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::UNARY, method);
     }
 
+    /// @brief 注册客户端流成员方法
     template<typename T>
     void registerClientStreamingMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::CLIENT_STREAMING, method);
     }
 
+    /// @brief 注册服务端流成员方法
     template<typename T>
     void registerServerStreamingMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::SERVER_STREAMING, method);
     }
 
+    /// @brief 注册双向流成员方法
     template<typename T>
     void registerBidiStreamingMethod(std::string_view name, Coroutine (T::*method)(RpcContext&)) {
         registerMemberMethod(name, RpcCallMode::BIDI_STREAMING, method);
     }
 
+    /**
+     * @brief 注册流会话方法（独立于帧级流模式）
+     * @param name 方法名
+     * @param handler 流处理函数
+     */
     void registerStreamMethod(std::string_view name, RpcStreamHandler handler) {
         m_stream_session_methods[std::string(name)] = std::move(handler);
     }
 
+    /**
+     * @brief 注册流会话成员方法
+     * @tparam T 服务类型
+     * @param name 方法名
+     * @param method 成员函数指针
+     */
     template<typename T>
     void registerStreamMethod(std::string_view name, Coroutine (T::*method)(RpcStream&)) {
         m_stream_session_methods[std::string(name)] =
@@ -196,11 +231,13 @@ protected:
     }
 
 private:
+    /// @brief 流式RPC方法槽位（每种模式一个handler）
     struct RpcMethodSlots {
-        std::array<RpcMethodHandler, kStreamRpcModeCount> handlers{};
-        std::array<bool, kStreamRpcModeCount> registered{false, false, false};
+        std::array<RpcMethodHandler, kStreamRpcModeCount> handlers{};      ///< 各模式的处理函数
+        std::array<bool, kStreamRpcModeCount> registered{false, false, false};  ///< 各模式是否已注册
     };
 
+    /// @brief 将流调用模式转换为索引
     static size_t streamModeIndex(RpcCallMode mode) {
         switch (mode) {
             case RpcCallMode::CLIENT_STREAMING:
@@ -214,6 +251,7 @@ private:
         }
     }
 
+    /// @brief 按调用模式注册方法
     void registerMethodByMode(std::string_view name, RpcCallMode mode, RpcMethodHandler handler) {
         const std::string method_name(name);
         if (mode == RpcCallMode::UNARY) {
@@ -227,6 +265,7 @@ private:
         slots.registered[mode_idx] = true;
     }
 
+    /// @brief 注册成员方法（将成员函数包装为RpcMethodHandler）
     template<typename T>
     void registerMemberMethod(std::string_view name,
                               RpcCallMode mode,
@@ -239,10 +278,10 @@ private:
     }
 
 private:
-    std::string m_name;
-    std::unordered_map<std::string, RpcMethodHandler> m_unary_methods;
-    std::unordered_map<std::string, RpcMethodSlots> m_stream_methods;
-    std::unordered_map<std::string, RpcStreamHandler> m_stream_session_methods;
+    std::string m_name;                                             ///< 服务名
+    std::unordered_map<std::string, RpcMethodHandler> m_unary_methods;      ///< 一元方法注册表
+    std::unordered_map<std::string, RpcMethodSlots> m_stream_methods;       ///< 流式方法注册表
+    std::unordered_map<std::string, RpcStreamHandler> m_stream_session_methods;  ///< 流会话方法注册表
 };
 
 /**
@@ -252,6 +291,11 @@ private:
  */
 class RpcContext {
 public:
+    /**
+     * @brief 构造RPC上下文
+     * @param request 请求对象引用
+     * @param response 响应对象引用
+     */
     RpcContext(RpcRequest& request, RpcResponse& response)
         : m_request(request)
         , m_response(response) {}
@@ -282,23 +326,28 @@ public:
         m_response.payload(data, len);
     }
 
+    /// @brief 设置响应数据（字符串）
     void setPayload(const std::string& data) {
         m_response.payload(data.data(), data.size());
     }
 
+    /// @brief 设置响应数据（移动向量）
     void setPayload(std::vector<char>&& data) {
         m_response.payload(std::move(data));
     }
 
-    // 借用模式：仅传递payload视图，不复制数据。
-    // 需确保view引用的数据在响应发送完成前有效。
+    /**
+     * @brief 设置响应payload视图（零拷贝借用模式）
+     * @param view 外部payload视图
+     * @note 需确保view引用的数据在响应发送完成前有效
+     */
     void setPayload(const RpcPayloadView& view) {
         m_response.payloadView(view);
     }
 
 private:
-    RpcRequest& m_request;
-    RpcResponse& m_response;
+    RpcRequest& m_request;    ///< 请求引用
+    RpcResponse& m_response;  ///< 响应引用
 };
 
 } // namespace galay::rpc

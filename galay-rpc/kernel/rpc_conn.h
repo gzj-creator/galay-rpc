@@ -39,11 +39,12 @@ template<typename SocketType> class RpcConnImpl;
 template<typename SocketType> class RpcReaderImpl;
 template<typename SocketType> class RpcWriterImpl;
 
-// RPC 连接默认环形缓冲区大小（8KB）
+/// @brief RPC连接默认环形缓冲区大小（8KB）
 inline constexpr size_t kDefaultRpcRingBufferSize = 8 * 1024;
 
 namespace detail {
 
+/// @brief 计算iovec数组中可读取的总字节数
 inline size_t iovecsReadableBytes(std::span<const iovec> iovecs) {
     size_t total = 0;
     for (const auto& iov : iovecs) {
@@ -52,6 +53,14 @@ inline size_t iovecsReadableBytes(std::span<const iovec> iovecs) {
     return total;
 }
 
+/**
+ * @brief 从iovec数组中拷贝指定偏移和长度的数据到输出缓冲区
+ * @param iovecs iovec数组
+ * @param src_offset 源偏移量
+ * @param out 输出缓冲区
+ * @param bytes 要拷贝的字节数
+ * @return 是否成功拷贝了请求的字节数
+ */
 inline bool copyFromIovecs(std::span<const iovec> iovecs,
                            size_t src_offset,
                            char* out,
@@ -80,6 +89,14 @@ inline bool copyFromIovecs(std::span<const iovec> iovecs,
     return copied == bytes;
 }
 
+/**
+ * @brief 从iovec数组中构建payload视图（零拷贝）
+ * @param iovecs iovec数组
+ * @param src_offset 源偏移量
+ * @param bytes 要提取的字节数
+ * @param view 输出的payload视图
+ * @return 是否成功构建（最多支持两段视图）
+ */
 inline bool payloadViewFromIovecs(std::span<const iovec> iovecs,
                                   size_t src_offset,
                                   size_t bytes,
@@ -124,6 +141,14 @@ inline bool payloadViewFromIovecs(std::span<const iovec> iovecs,
     return remaining == 0;
 }
 
+/**
+ * @brief 尝试从iovec数组中解析RPC请求消息
+ * @param iovecs iovec数组
+ * @param total_readable 可读取的总字节数
+ * @param max_message_size 最大消息体大小
+ * @param request 输出的请求对象
+ * @return 解析消耗的字节数（0表示数据不足），或错误
+ */
 inline std::expected<size_t, RpcError> tryParseRequestMessage(std::span<const iovec> iovecs,
                                                               size_t total_readable,
                                                               size_t max_message_size,
@@ -206,6 +231,14 @@ inline std::expected<size_t, RpcError> tryParseRequestMessage(std::span<const io
     return msg_len;
 }
 
+/**
+ * @brief 尝试从iovec数组中解析RPC响应消息
+ * @param iovecs iovec数组
+ * @param total_readable 可读取的总字节数
+ * @param max_message_size 最大消息体大小
+ * @param response 输出的响应对象
+ * @return 解析消耗的字节数（0表示数据不足），或错误
+ */
 inline std::expected<size_t, RpcError> tryParseResponseMessage(std::span<const iovec> iovecs,
                                                                size_t total_readable,
                                                                size_t max_message_size,
@@ -286,6 +319,11 @@ namespace detail {
 
 using RpcAwaitableResult = std::expected<bool, RpcError>;
 
+/**
+ * @brief RPC请求读取状态
+ *
+ * @details 从RingBuffer中逐步读取并解析完整的RPC请求消息。
+ */
 class RpcRequestReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
 public:
@@ -298,6 +336,7 @@ public:
     {
     }
 
+    /// @brief 从RingBuffer中尝试解析请求消息
     bool parseFromRingBuffer()
     {
         if (ringBuffer().readable() == 0) {
@@ -329,10 +368,15 @@ public:
     }
 
 private:
-    const RpcReaderSetting* m_setting = nullptr;
-    RpcRequest* m_request = nullptr;
+    const RpcReaderSetting* m_setting = nullptr;  ///< 读取配置
+    RpcRequest* m_request = nullptr;              ///< 输出请求对象
 };
 
+/**
+ * @brief RPC响应读取状态
+ *
+ * @details 从RingBuffer中逐步读取并解析完整的RPC响应消息。
+ */
 class RpcResponseReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
 public:
@@ -345,6 +389,7 @@ public:
     {
     }
 
+    /// @brief 从RingBuffer中尝试解析响应消息
     bool parseFromRingBuffer()
     {
         if (ringBuffer().readable() == 0) {
@@ -376,10 +421,15 @@ public:
     }
 
 private:
-    const RpcReaderSetting* m_setting = nullptr;
-    RpcResponse* m_response = nullptr;
+    const RpcReaderSetting* m_setting = nullptr;  ///< 读取配置
+    RpcResponse* m_response = nullptr;            ///< 输出响应对象
 };
 
+/**
+ * @brief RPC消息头读取状态
+ *
+ * @details 仅从RingBuffer中读取并解析RPC消息头（16字节）。
+ */
 class RpcHeaderReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
 public:
@@ -389,6 +439,7 @@ public:
     {
     }
 
+    /// @brief 从RingBuffer中尝试解析消息头
     bool parseFromRingBuffer()
     {
         std::array<struct iovec, 2> read_iovecs{};
@@ -411,12 +462,23 @@ public:
     }
 
 private:
-    RpcHeader* m_header = nullptr;
+    RpcHeader* m_header = nullptr;  ///< 输出消息头
 };
 
+/**
+ * @brief RPC消息体读取状态
+ *
+ * @details 从RingBuffer中读取指定长度的消息体数据。
+ */
 class RpcBodyReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
 public:
+    /**
+     * @brief 构造消息体读取状态
+     * @param ring_buffer 环形缓冲区
+     * @param body 输出缓冲区
+     * @param body_len 要读取的体长度
+     */
     RpcBodyReadState(RingBuffer& ring_buffer, char* body, size_t body_len)
         : RpcRingBufferReadStateBase<RpcAwaitableResult>(ring_buffer)
         , m_body(body)
@@ -424,6 +486,7 @@ public:
     {
     }
 
+    /// @brief 从RingBuffer中尝试读取指定长度的消息体
     bool parseFromRingBuffer()
     {
         std::array<struct iovec, 2> read_iovecs{};
@@ -439,13 +502,23 @@ public:
     }
 
 private:
-    char* m_body = nullptr;
-    size_t m_body_len = 0;
+    char* m_body = nullptr;      ///< 输出缓冲区
+    size_t m_body_len = 0;       ///< 体长度
 };
 
+/**
+ * @brief RPC请求写入状态
+ *
+ * @details 将RpcRequest序列化为iovec数组（头部+服务名+方法名+payload），
+ *          用于通过writev发送。
+ */
 class RpcRequestWriteState : public RpcWriteStateBase<RpcAwaitableResult>
 {
 public:
+    /**
+     * @brief 构造请求写入状态
+     * @param request 要发送的请求对象
+     */
     explicit RpcRequestWriteState(const RpcRequest& request)
         : m_request(&request)
     {
@@ -453,6 +526,7 @@ public:
     }
 
 private:
+    /// @brief 重建iovec数组
     void rebuildIovecs()
     {
         RpcPayloadView payload_view = m_request->payloadView();
@@ -507,15 +581,25 @@ private:
         }
     }
 
-    const RpcRequest* m_request = nullptr;
-    std::array<char, RPC_HEADER_SIZE> m_header{};
-    uint16_t m_service_len = 0;
-    uint16_t m_method_len = 0;
+    const RpcRequest* m_request = nullptr;           ///< 请求对象指针
+    std::array<char, RPC_HEADER_SIZE> m_header{};    ///< 序列化后的头部缓冲区
+    uint16_t m_service_len = 0;                       ///< 网络字节序的服务名长度
+    uint16_t m_method_len = 0;                        ///< 网络字节序的方法名长度
 };
 
+/**
+ * @brief RPC响应写入状态
+ *
+ * @details 将RpcResponse序列化为iovec数组（头部+错误码+payload），
+ *          用于通过writev发送。
+ */
 class RpcResponseWriteState : public RpcWriteStateBase<RpcAwaitableResult>
 {
 public:
+    /**
+     * @brief 构造响应写入状态
+     * @param response 要发送的响应对象
+     */
     explicit RpcResponseWriteState(const RpcResponse& response)
         : m_response(&response)
     {
@@ -523,6 +607,7 @@ public:
     }
 
 private:
+    /// @brief 重建iovec数组
     void rebuildIovecs()
     {
         RpcPayloadView payload_view = m_response->payloadView();
@@ -558,19 +643,32 @@ private:
         }
     }
 
-    const RpcResponse* m_response = nullptr;
-    std::array<char, RPC_HEADER_SIZE> m_header{};
-    uint16_t m_error_code = 0;
+    const RpcResponse* m_response = nullptr;          ///< 响应对象指针
+    std::array<char, RPC_HEADER_SIZE> m_header{};     ///< 序列化后的头部缓冲区
+    uint16_t m_error_code = 0;                         ///< 网络字节序的错误码
 };
 
 }  // namespace detail
 
+/**
+ * @brief RPC请求接收等待体（使用readv）
+ *
+ * @details 支持超时控制的RPC请求接收协程等待体。
+ * @tparam SocketType Socket类型
+ */
 template<typename SocketType>
 class GetRpcRequestAwaitable : public TimeoutSupport<GetRpcRequestAwaitable<SocketType>>
 {
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造请求接收等待体
+     * @param ring_buffer 环形缓冲区
+     * @param setting 读取配置
+     * @param request 输出请求对象
+     * @param socket Socket引用
+     */
     GetRpcRequestAwaitable(RingBuffer& ring_buffer,
                            const RpcReaderSetting& setting,
                            RpcRequest& request,
@@ -601,12 +699,15 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcRequestReadState>>;
 
-    std::shared_ptr<detail::RpcRequestReadState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcRequestReadState> m_state;  ///< 读取状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief RPC响应读取等待体（使用readv）
+ *
+ * @details 支持超时控制的RPC响应接收协程等待体。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class GetRpcResponseAwaitable : public TimeoutSupport<GetRpcResponseAwaitable<SocketType>>
@@ -614,6 +715,13 @@ class GetRpcResponseAwaitable : public TimeoutSupport<GetRpcResponseAwaitable<So
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造响应接收等待体
+     * @param ring_buffer 环形缓冲区
+     * @param setting 读取配置
+     * @param response 输出响应对象
+     * @param socket Socket引用
+     */
     GetRpcResponseAwaitable(RingBuffer& ring_buffer,
                             const RpcReaderSetting& setting,
                             RpcResponse& response,
@@ -644,12 +752,15 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcResponseReadState>>;
 
-    std::shared_ptr<detail::RpcResponseReadState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcResponseReadState> m_state;  ///< 读取状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief RPC发送请求等待体（使用writev）
+ *
+ * @details 支持超时控制的RPC请求发送协程等待体。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class SendRpcRequestAwaitable : public TimeoutSupport<SendRpcRequestAwaitable<SocketType>>
@@ -657,6 +768,11 @@ class SendRpcRequestAwaitable : public TimeoutSupport<SendRpcRequestAwaitable<So
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造请求发送等待体
+     * @param request 要发送的请求
+     * @param socket Socket引用
+     */
     SendRpcRequestAwaitable(const RpcRequest& request, SocketType& socket)
         : m_state(std::make_shared<detail::RpcRequestWriteState>(request))
         , m_inner(
@@ -684,12 +800,15 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcRequestWriteState>>;
 
-    std::shared_ptr<detail::RpcRequestWriteState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcRequestWriteState> m_state;  ///< 写入状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief RPC发送响应等待体（使用writev）
+ *
+ * @details 支持超时控制的RPC响应发送协程等待体。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class SendRpcResponseAwaitable : public TimeoutSupport<SendRpcResponseAwaitable<SocketType>>
@@ -697,6 +816,11 @@ class SendRpcResponseAwaitable : public TimeoutSupport<SendRpcResponseAwaitable<
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造响应发送等待体
+     * @param response 要发送的响应
+     * @param socket Socket引用
+     */
     SendRpcResponseAwaitable(const RpcResponse& response, SocketType& socket)
         : m_state(std::make_shared<detail::RpcResponseWriteState>(response))
         , m_inner(
@@ -724,12 +848,15 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcResponseWriteState>>;
 
-    std::shared_ptr<detail::RpcResponseWriteState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcResponseWriteState> m_state;  ///< 写入状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief 发送原始数据等待体（用于流式传输）
+ *
+ * @details 将原始字节向量通过writev发送，支持超时控制。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class SendRawDataAwaitable : public TimeoutSupport<SendRawDataAwaitable<SocketType>>
@@ -737,6 +864,11 @@ class SendRawDataAwaitable : public TimeoutSupport<SendRawDataAwaitable<SocketTy
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造原始数据发送等待体
+     * @param data 要发送的数据（移动语义）
+     * @param socket Socket引用
+     */
     SendRawDataAwaitable(std::vector<char>&& data, SocketType& socket)
         : m_state(std::make_shared<detail::RpcVectorWriteState>(std::move(data)))
         , m_inner(
@@ -764,12 +896,15 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcWritevMachine<detail::RpcVectorWriteState>>;
 
-    std::shared_ptr<detail::RpcVectorWriteState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcVectorWriteState> m_state;  ///< 写入状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief 读取消息头等待体（用于流式传输）
+ *
+ * @details 仅读取RPC消息头的协程等待体，支持超时控制。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class GetRpcHeaderAwaitable : public TimeoutSupport<GetRpcHeaderAwaitable<SocketType>>
@@ -777,6 +912,12 @@ class GetRpcHeaderAwaitable : public TimeoutSupport<GetRpcHeaderAwaitable<Socket
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造消息头读取等待体
+     * @param ring_buffer 环形缓冲区
+     * @param header 输出消息头
+     * @param socket Socket引用
+     */
     GetRpcHeaderAwaitable(RingBuffer& ring_buffer, RpcHeader& header, SocketType& socket)
         : m_state(std::make_shared<detail::RpcHeaderReadState>(ring_buffer, header))
         , m_inner(
@@ -804,12 +945,15 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcHeaderReadState>>;
 
-    std::shared_ptr<detail::RpcHeaderReadState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcHeaderReadState> m_state;  ///< 读取状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief 读取消息体等待体（用于流式传输）
+ *
+ * @details 读取指定长度消息体的协程等待体，支持超时控制。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class GetRpcBodyAwaitable : public TimeoutSupport<GetRpcBodyAwaitable<SocketType>>
@@ -817,6 +961,13 @@ class GetRpcBodyAwaitable : public TimeoutSupport<GetRpcBodyAwaitable<SocketType
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造消息体读取等待体
+     * @param ring_buffer 环形缓冲区
+     * @param body 输出缓冲区
+     * @param body_len 要读取的体长度
+     * @param socket Socket引用
+     */
     GetRpcBodyAwaitable(RingBuffer& ring_buffer, char* body, size_t body_len, SocketType& socket)
         : m_state(std::make_shared<detail::RpcBodyReadState>(ring_buffer, body, body_len))
         , m_inner(
@@ -844,20 +995,29 @@ private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::RpcBodyReadState>>;
 
-    std::shared_ptr<detail::RpcBodyReadState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::RpcBodyReadState> m_state;  ///< 读取状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
 /**
  * @brief RPC读取器模板类
+ *
+ * @details 提供从连接中读取RPC请求、响应、消息头和消息体的接口。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class RpcReaderImpl
 {
 public:
-    using GetHeaderAwaitable = GetRpcHeaderAwaitable<SocketType>;
-    using GetBodyAwaitable = GetRpcBodyAwaitable<SocketType>;
+    using GetHeaderAwaitable = GetRpcHeaderAwaitable<SocketType>;  ///< 消息头读取等待体类型
+    using GetBodyAwaitable = GetRpcBodyAwaitable<SocketType>;      ///< 消息体读取等待体类型
 
+    /**
+     * @brief 构造读取器
+     * @param ring_buffer 环形缓冲区
+     * @param setting 读取配置
+     * @param socket Socket引用
+     */
     RpcReaderImpl(RingBuffer& ring_buffer, const RpcReaderSetting& setting, SocketType& socket)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
@@ -898,20 +1058,28 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const RpcReaderSetting& m_setting;
-    SocketType& m_socket;
+    RingBuffer& m_ring_buffer;              ///< 环形缓冲区引用
+    const RpcReaderSetting& m_setting;      ///< 读取配置引用
+    SocketType& m_socket;                   ///< Socket引用
 };
 
 /**
  * @brief RPC写入器模板类
+ *
+ * @details 提供向连接中发送RPC请求、响应和原始数据的接口。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class RpcWriterImpl
 {
 public:
-    using SendRawAwaitable = SendRawDataAwaitable<SocketType>;
+    using SendRawAwaitable = SendRawDataAwaitable<SocketType>;  ///< 原始数据发送等待体类型
 
+    /**
+     * @brief 构造写入器
+     * @param setting 写入配置
+     * @param socket Socket引用
+     */
     RpcWriterImpl(const RpcWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(socket)
@@ -945,12 +1113,13 @@ public:
     }
 
 private:
-    const RpcWriterSetting& m_setting;
-    SocketType& m_socket;
+    const RpcWriterSetting& m_setting;  ///< 写入配置引用
+    SocketType& m_socket;               ///< Socket引用
 };
 
-// 类型别名
+/// @brief RPC读取器类型别名（TcpSocket）
 using RpcReader = RpcReaderImpl<TcpSocket>;
+/// @brief RPC写入器类型别名（TcpSocket）
 using RpcWriter = RpcWriterImpl<TcpSocket>;
 
 /**
@@ -1037,17 +1206,18 @@ public:
     }
 
 private:
+    /// @brief 归一化环形缓冲区大小，0替换为默认值
     static size_t normalizeRingBufferSize(size_t ring_buffer_size) {
         return ring_buffer_size == 0 ? kDefaultRingBufferSize : ring_buffer_size;
     }
 
-    SocketType m_socket;
-    RingBuffer m_ring_buffer;
-    RpcReaderSetting m_reader_setting;
-    RpcWriterSetting m_writer_setting;
+    SocketType m_socket;                        ///< 底层Socket
+    RingBuffer m_ring_buffer;                   ///< 环形缓冲区
+    RpcReaderSetting m_reader_setting;          ///< 读取配置
+    RpcWriterSetting m_writer_setting;          ///< 写入配置
 };
 
-// 类型别名
+/// @brief RPC连接类型别名（TcpSocket）
 using RpcConn = RpcConnImpl<TcpSocket>;
 
 } // namespace galay::rpc

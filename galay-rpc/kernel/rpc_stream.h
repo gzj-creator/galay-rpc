@@ -56,11 +56,20 @@ using namespace galay::kernel;
 
 /**
  * @brief 流消息
+ *
+ * @details 流式RPC中的消息单元，包含流ID、payload和消息类型。
+ *          支持自有缓冲和零拷贝借用两种payload模式。
  */
 class StreamMessage {
 public:
     StreamMessage() = default;
 
+    /**
+     * @brief 构造流消息
+     * @param stream_id 流ID
+     * @param data payload数据
+     * @param len payload长度
+     */
     StreamMessage(uint32_t stream_id, const char* data, size_t len)
         : m_stream_id(stream_id)
         , m_is_end(false)
@@ -70,7 +79,9 @@ public:
         }
     }
 
+    /// @brief 获取流ID
     uint32_t streamId() const { return m_stream_id; }
+    /// @brief 设置流ID
     void streamId(uint32_t id) { m_stream_id = id; }
 
     const std::vector<char>& payload() const {
@@ -130,6 +141,7 @@ public:
             0
         };
     }
+    /// @brief 设置payload（字符串拷贝模式）
     void payload(const std::string& data) {
         m_payload.assign(data.begin(), data.end());
         m_payload_owned = true;
@@ -153,10 +165,14 @@ public:
         m_payload_owned = false;
     }
 
+    /// @brief 判断是否为流结束帧
     bool isEnd() const { return m_is_end; }
+    /// @brief 设置流结束标志
     void setEnd(bool end = true) { m_is_end = end; }
 
+    /// @brief 获取消息类型
     RpcMessageType messageType() const { return m_msg_type; }
+    /// @brief 设置消息类型
     void messageType(RpcMessageType type) { m_msg_type = type; }
 
     /**
@@ -226,31 +242,45 @@ private:
     }
 
 private:
-    uint32_t m_stream_id = 0;
-    mutable std::vector<char> m_payload;
-    mutable RpcPayloadView m_payload_view{};
-    mutable bool m_payload_owned = true;
-    bool m_is_end = false;
-    RpcMessageType m_msg_type = RpcMessageType::STREAM_DATA;
+    uint32_t m_stream_id = 0;                       ///< 流ID
+    mutable std::vector<char> m_payload;            ///< payload缓冲区
+    mutable RpcPayloadView m_payload_view{};        ///< payload零拷贝视图
+    mutable bool m_payload_owned = true;            ///< 是否拥有payload数据
+    bool m_is_end = false;                          ///< 流结束标志
+    RpcMessageType m_msg_type = RpcMessageType::STREAM_DATA;  ///< 消息类型
 };
 
 /**
  * @brief 流初始化请求
+ *
+ * @details 流会话建立时的初始化帧，携带服务名和方法名用于路由。
  */
 class StreamInitRequest {
 public:
     StreamInitRequest() = default;
 
+    /**
+     * @brief 构造流初始化请求
+     * @param stream_id 流ID
+     * @param service 服务名
+     * @param method 方法名
+     */
     StreamInitRequest(uint32_t stream_id, std::string_view service, std::string_view method)
         : m_stream_id(stream_id)
         , m_service_name(service)
         , m_method_name(method) {}
 
+    /// @brief 获取流ID
     uint32_t streamId() const { return m_stream_id; }
+    /// @brief 设置流ID
     void streamId(uint32_t id) { m_stream_id = id; }
+    /// @brief 获取服务名
     const std::string& serviceName() const { return m_service_name; }
+    /// @brief 设置服务名
     void serviceName(std::string_view name) { m_service_name = name; }
+    /// @brief 获取方法名
     const std::string& methodName() const { return m_method_name; }
+    /// @brief 设置方法名
     void methodName(std::string_view name) { m_method_name = name; }
 
     std::vector<char> serialize() const {
@@ -307,9 +337,9 @@ public:
     }
 
 private:
-    uint32_t m_stream_id = 0;
-    std::string m_service_name;
-    std::string m_method_name;
+    uint32_t m_stream_id = 0;      ///< 流ID
+    std::string m_service_name;    ///< 服务名
+    std::string m_method_name;     ///< 方法名
 };
 
 // 前向声明
@@ -318,6 +348,12 @@ template<typename SocketType> class StreamWriterImpl;
 
 namespace detail {
 
+/**
+ * @brief 流消息读取状态
+ *
+ * @details 从RingBuffer中逐步读取流消息（头部+体）。
+ *          内部维护ReadHeader/ReadBody两阶段状态。
+ */
 class StreamMessageReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
 public:
@@ -395,19 +431,30 @@ public:
 
 private:
     enum class State {
-        ReadHeader,
-        ReadBody
+        ReadHeader,  ///< 读取头部阶段
+        ReadBody     ///< 读取消息体阶段
     };
 
-    StreamMessage* m_message = nullptr;
-    State m_state = State::ReadHeader;
-    RpcHeader m_header;
-    size_t m_body_length = 0;
+    StreamMessage* m_message = nullptr;   ///< 输出消息对象
+    State m_state = State::ReadHeader;    ///< 当前读取阶段
+    RpcHeader m_header;                    ///< 临时头部
+    size_t m_body_length = 0;             ///< 待读取的体长度
 };
 
+/**
+ * @brief 流帧写入状态
+ *
+ * @details 将流帧（控制帧、数据帧、初始化帧）序列化为iovec数组，
+ *          用于通过writev发送。支持多种构造方式以适应不同的帧类型。
+ */
 class StreamFrameWriteState : public RpcWriteStateBase<RpcAwaitableResult>
 {
 public:
+    /**
+     * @brief 构造控制帧写入状态（无body，如STREAM_END/STREAM_CANCEL）
+     * @param stream_id 流ID
+     * @param type 消息类型
+     */
     StreamFrameWriteState(uint32_t stream_id, RpcMessageType type)
     {
         RpcHeader header;
@@ -421,6 +468,12 @@ public:
         iovecs.push_back(iovec{m_header.data(), RPC_HEADER_SIZE});
     }
 
+    /**
+     * @brief 构造数据帧写入状态（拷贝模式）
+     * @param stream_id 流ID
+     * @param data 数据指针
+     * @param len 数据长度
+     */
     StreamFrameWriteState(uint32_t stream_id, const char* data, size_t len)
     {
         if (len > 0) {
@@ -429,11 +482,22 @@ public:
         buildDataFrame(stream_id, payloadView());
     }
 
+    /**
+     * @brief 构造数据帧写入状态（零拷贝模式）
+     * @param stream_id 流ID
+     * @param payload_view payload视图
+     */
     StreamFrameWriteState(uint32_t stream_id, const RpcPayloadView& payload_view)
     {
         buildDataFrame(stream_id, payload_view);
     }
 
+    /**
+     * @brief 构造流初始化帧写入状态
+     * @param stream_id 流ID
+     * @param service 服务名
+     * @param method 方法名
+     */
     StreamFrameWriteState(uint32_t stream_id,
                           std::string_view service,
                           std::string_view method)
@@ -501,12 +565,12 @@ private:
         }
     }
 
-    std::array<char, RPC_HEADER_SIZE> m_header{};
-    std::vector<char> m_owned_payload;
-    std::string m_service;
-    std::string m_method;
-    uint16_t m_service_len = 0;
-    uint16_t m_method_len = 0;
+    std::array<char, RPC_HEADER_SIZE> m_header{};    ///< 序列化后的头部缓冲区
+    std::vector<char> m_owned_payload;                ///< 持有的payload数据
+    std::string m_service;                            ///< 服务名（用于STREAM_INIT）
+    std::string m_method;                             ///< 方法名（用于STREAM_INIT）
+    uint16_t m_service_len = 0;                       ///< 网络字节序的服务名长度
+    uint16_t m_method_len = 0;                        ///< 网络字节序的方法名长度
 };
 
 }  // namespace detail
@@ -612,16 +676,24 @@ public:
     }
 
 private:
-    RingBuffer* m_ring_buffer = nullptr;
-    SocketType* m_socket = nullptr;
+    RingBuffer* m_ring_buffer = nullptr;  ///< 环形缓冲区指针
+    SocketType* m_socket = nullptr;       ///< Socket指针
 };
 
 /**
  * @brief 流写入器
+ *
+ * @details 提供流式RPC数据发送功能，支持数据帧、初始化帧、结束帧和取消帧。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class StreamWriterImpl {
 public:
+    /**
+     * @brief 构造流写入器
+     * @param socket Socket引用
+     * @param stream_id 流ID
+     */
     StreamWriterImpl(SocketType& socket, uint32_t stream_id)
         : m_socket(&socket)
         , m_stream_id(stream_id)
@@ -695,16 +767,28 @@ public:
     }
 
 private:
-    SocketType* m_socket = nullptr;
-    uint32_t m_stream_id;
+    SocketType* m_socket = nullptr;  ///< Socket指针
+    uint32_t m_stream_id;            ///< 流ID
 };
 
 /**
  * @brief RPC流会话
+ *
+ * @details 封装一个完整的流式RPC会话，包含独立的读取器和写入器，
+ *          以及流ID和路由信息。每条连接同一时刻只处理一个活跃流会话。
+ * @tparam SocketType Socket类型
  */
 template<typename SocketType>
 class RpcStreamImpl {
 public:
+    /**
+     * @brief 构造流会话
+     * @param socket Socket引用
+     * @param ring_buffer 环形缓冲区引用
+     * @param stream_id 流ID
+     * @param service_name 服务名
+     * @param method_name 方法名
+     */
     RpcStreamImpl(SocketType& socket,
                   RingBuffer& ring_buffer,
                   uint32_t stream_id,
@@ -719,6 +803,7 @@ public:
         , m_writer(socket, stream_id)
     {}
 
+    /// @brief 获取流ID
     uint32_t streamId() const { return m_stream_id; }
     /**
      * @brief 更新逻辑流 ID，并同步到底层写入器
@@ -728,25 +813,37 @@ public:
         m_stream_id = stream_id;
         m_writer.streamId(stream_id);
     }
+    /// @brief 获取服务名
     const std::string& serviceName() const { return m_service_name; }
+    /// @brief 获取方法名
     const std::string& methodName() const { return m_method_name; }
 
+    /**
+     * @brief 设置路由信息
+     * @param service_name 服务名
+     * @param method_name 方法名
+     */
     void setRoute(std::string service_name, std::string method_name) {
         m_service_name = std::move(service_name);
         m_method_name = std::move(method_name);
     }
 
+    /// @brief 获取流读取器
     StreamReaderImpl<SocketType>& getReader() { return m_reader; }
+    /// @brief 获取流写入器
     StreamWriterImpl<SocketType>& getWriter() { return m_writer; }
 
+    /// @brief 读取流消息
     GetStreamMessageAwaitable<SocketType> read(StreamMessage& msg) {
         return m_reader.getMessage(msg);
     }
 
+    /// @brief 发送流初始化（使用已有路由信息）
     SendStreamDataAwaitable<SocketType> sendInit() {
         return m_writer.sendInit(m_service_name, m_method_name);
     }
 
+    /// @brief 发送流初始化（更新路由信息）
     SendStreamDataAwaitable<SocketType> sendInit(const std::string& service, const std::string& method) {
         m_service_name = service;
         m_method_name = method;
@@ -754,7 +851,9 @@ public:
     }
 
     SendStreamDataAwaitable<SocketType> sendInitAck() { return m_writer.sendInitAck(); }
+    /// @brief 发送流数据（指针+长度）
     SendStreamDataAwaitable<SocketType> sendData(const char* data, size_t len) { return m_writer.sendData(data, len); }
+    /// @brief 发送流数据（字符串）
     SendStreamDataAwaitable<SocketType> sendData(const std::string& data) { return m_writer.sendData(data); }
     /**
      * @brief 发送借用型 payload 视图
@@ -763,25 +862,31 @@ public:
      * @note 调用方需保证 payload 所指向内存在本次 `co_await` 完成前保持有效。
      */
     SendStreamDataAwaitable<SocketType> sendData(const RpcPayloadView& payload_view) { return m_writer.sendData(payload_view); }
+    /// @brief 发送流结束帧
     SendStreamDataAwaitable<SocketType> sendEnd() { return m_writer.sendEnd(); }
+    /// @brief 发送流取消帧
     SendStreamDataAwaitable<SocketType> sendCancel() { return m_writer.sendCancel(); }
 
+    /// @brief 获取底层Socket
     SocketType& socket() { return *m_socket; }
+    /// @brief 获取环形缓冲区
     RingBuffer& ringBuffer() { return *m_ring_buffer; }
 
 private:
-    SocketType* m_socket = nullptr;
-    RingBuffer* m_ring_buffer = nullptr;
-    uint32_t m_stream_id;
-    std::string m_service_name;
-    std::string m_method_name;
-    StreamReaderImpl<SocketType> m_reader;
-    StreamWriterImpl<SocketType> m_writer;
+    SocketType* m_socket = nullptr;                          ///< Socket指针
+    RingBuffer* m_ring_buffer = nullptr;                     ///< 环形缓冲区指针
+    uint32_t m_stream_id;                                    ///< 流ID
+    std::string m_service_name;                              ///< 服务名
+    std::string m_method_name;                               ///< 方法名
+    StreamReaderImpl<SocketType> m_reader;                   ///< 流读取器
+    StreamWriterImpl<SocketType> m_writer;                   ///< 流写入器
 };
 
-// 类型别名
+/// @brief 流读取器类型别名（TcpSocket）
 using StreamReader = StreamReaderImpl<TcpSocket>;
+/// @brief 流写入器类型别名（TcpSocket）
 using StreamWriter = StreamWriterImpl<TcpSocket>;
+/// @brief RPC流会话类型别名（TcpSocket）
 using RpcStream = RpcStreamImpl<TcpSocket>;
 
 } // namespace galay::rpc

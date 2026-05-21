@@ -64,19 +64,41 @@ struct RpcServerConfig {
 
 class RpcServer;
 
+/**
+ * @brief RPC服务器构建器
+ *
+ * @details 使用Builder模式配置并创建RpcServer实例。
+ */
 class RpcServerBuilder {
 public:
+    /// @brief 设置监听地址
     RpcServerBuilder& host(std::string value)                            { m_config.host = std::move(value); return *this; }
+    /// @brief 设置监听端口
     RpcServerBuilder& port(uint16_t value)                               { m_config.port = value; return *this; }
+    /// @brief 设置监听队列长度
     RpcServerBuilder& backlog(int value)                                 { m_config.backlog = value; return *this; }
+    /// @brief 设置IO调度器数量
     RpcServerBuilder& ioSchedulerCount(size_t value)                     { m_config.io_scheduler_count = value; return *this; }
+    /// @brief 设置计算调度器数量
     RpcServerBuilder& computeSchedulerCount(size_t value)                { m_config.compute_scheduler_count = value; return *this; }
+    /**
+     * @brief 设置顺序绑核策略
+     * @param io_count IO调度器绑核数
+     * @param compute_count 计算调度器绑核数
+     * @return 构建器引用
+     */
     RpcServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
         m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
         m_config.affinity.seq_io_count = io_count;
         m_config.affinity.seq_compute_count = compute_count;
         return *this;
     }
+    /**
+     * @brief 设置自定义绑核策略
+     * @param io_cpus IO调度器绑定的CPU列表
+     * @param compute_cpus 计算调度器绑定的CPU列表
+     * @return 是否设置成功（数量必须匹配调度器数量）
+     */
     bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
         if (io_cpus.size() != m_config.io_scheduler_count ||
             compute_cpus.size() != m_config.compute_scheduler_count) {
@@ -87,16 +109,22 @@ public:
         m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
         return true;
     }
+    /// @brief 设置环形缓冲区大小
     RpcServerBuilder& ringBufferSize(size_t value)                       { m_config.ring_buffer_size = value; return *this; }
+    /// @brief 构建RpcServer实例
     RpcServer build() const;
+    /// @brief 仅导出配置
     RpcServerConfig buildConfig() const                                  { return m_config; }
 
 private:
-    RpcServerConfig m_config;
+    RpcServerConfig m_config;  ///< 服务器配置
 };
 
 /**
  * @brief RPC服务器
+ *
+ * @details 提供一元RPC服务器功能，支持服务注册、路由缓存和请求分发。
+ *          每个连接由协程驱动，使用RingBuffer配合readv/writev进行高效IO。
  */
 class RpcServer {
 public:
@@ -492,11 +520,11 @@ private:
     }
 
 private:
-    RpcServerConfig m_config;
-    Runtime m_runtime;
-    std::unordered_map<std::string, std::shared_ptr<RpcService>> m_services;
-    std::atomic<bool> m_running{false};
-    std::optional<RpcError> m_last_error;
+    RpcServerConfig m_config;          ///< 服务器配置
+    Runtime m_runtime;                 ///< 运行时
+    std::unordered_map<std::string, std::shared_ptr<RpcService>> m_services;  ///< 服务注册表
+    std::atomic<bool> m_running{false}; ///< 运行标志
+    std::optional<RpcError> m_last_error; ///< 最后一次错误
 };
 
 inline RpcServer RpcServerBuilder::build() const { return RpcServer(m_config); }

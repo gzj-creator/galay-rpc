@@ -3,6 +3,8 @@
  * @brief RPC基础定义
  * @author galay-rpc
  * @version 1.0.0
+ *
+ * @details 定义RPC协议的基础常量、枚举、字节序转换工具和头部flags编解码函数。
  */
 
 #ifndef GALAY_RPC_BASE_H
@@ -28,6 +30,11 @@ inline uint32_t rpcBswap32(uint32_t v) {
     }
 }
 
+/**
+ * @brief 16位字节序交换
+ * @param v 需要交换的16位值
+ * @return 字节序交换后的值
+ */
 inline uint16_t rpcBswap16(uint16_t v) {
     if constexpr (std::endian::native == std::endian::big) {
         return v;
@@ -36,10 +43,13 @@ inline uint16_t rpcBswap16(uint16_t v) {
     }
 }
 
-// 网络字节序 <-> 主机字节序（对称操作）
+/// @brief 32位主机字节序转网络字节序
 inline uint32_t rpcHtonl(uint32_t host) { return rpcBswap32(host); }
+/// @brief 32位网络字节序转主机字节序
 inline uint32_t rpcNtohl(uint32_t net)  { return rpcBswap32(net); }
+/// @brief 16位主机字节序转网络字节序
 inline uint16_t rpcHtons(uint16_t host) { return rpcBswap16(host); }
+/// @brief 16位网络字节序转主机字节序
 inline uint16_t rpcNtohs(uint16_t net)  { return rpcBswap16(net); }
 
 /**
@@ -70,12 +80,17 @@ enum class RpcCallMode : uint8_t {
 /**
  * @brief 头部 flags 布局
  *
- * bit[0..1]: RpcCallMode
- * bit[2]:    END_STREAM
+ * @details bit[0..1]: RpcCallMode，bit[2]: END_STREAM
  */
-constexpr uint8_t RPC_FLAG_MODE_MASK = 0x03;
-constexpr uint8_t RPC_FLAG_END_STREAM = 0x04;
+constexpr uint8_t RPC_FLAG_MODE_MASK = 0x03;   ///< 调用模式掩码
+constexpr uint8_t RPC_FLAG_END_STREAM = 0x04;  ///< 流结束标志位
 
+/**
+ * @brief 编码flags字段
+ * @param mode 调用模式
+ * @param end_stream 是否为流的最后一帧
+ * @return 编码后的flags字节
+ */
 inline uint8_t rpcEncodeFlags(RpcCallMode mode, bool end_stream) {
     uint8_t flags = static_cast<uint8_t>(mode) & RPC_FLAG_MODE_MASK;
     if (end_stream) {
@@ -84,14 +99,30 @@ inline uint8_t rpcEncodeFlags(RpcCallMode mode, bool end_stream) {
     return flags;
 }
 
+/**
+ * @brief 从flags字段解码调用模式
+ * @param flags 编码后的flags字节
+ * @return 调用模式
+ */
 inline RpcCallMode rpcDecodeCallMode(uint8_t flags) {
     return static_cast<RpcCallMode>(flags & RPC_FLAG_MODE_MASK);
 }
 
+/**
+ * @brief 判断flags是否标记了流结束
+ * @param flags 编码后的flags字节
+ * @return 是否为流结束
+ */
 inline bool rpcIsEndStream(uint8_t flags) {
     return (flags & RPC_FLAG_END_STREAM) != 0;
 }
 
+/**
+ * @brief 设置或清除flags中的流结束标志
+ * @param flags 原始flags字节
+ * @param end_stream 是否设置流结束
+ * @return 修改后的flags字节
+ */
 inline uint8_t rpcSetEndStreamFlag(uint8_t flags, bool end_stream) {
     if (end_stream) {
         return static_cast<uint8_t>(flags | RPC_FLAG_END_STREAM);

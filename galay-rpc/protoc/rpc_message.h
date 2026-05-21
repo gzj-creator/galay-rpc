@@ -41,12 +41,14 @@ namespace galay::rpc
  *       调用方必须保证视图覆盖的内存在使用期间保持有效。
  */
 struct RpcPayloadView {
-    const char* segment1 = nullptr;
-    size_t segment1_len = 0;
-    const char* segment2 = nullptr;
-    size_t segment2_len = 0;
+    const char* segment1 = nullptr;   ///< 第一段数据指针
+    size_t segment1_len = 0;          ///< 第一段数据长度
+    const char* segment2 = nullptr;   ///< 第二段数据指针
+    size_t segment2_len = 0;          ///< 第二段数据长度
 
+    /// @brief 获取payload总字节数
     size_t size() const { return segment1_len + segment2_len; }
+    /// @brief 判断payload是否为空
     bool empty() const { return size() == 0; }
 };
 
@@ -110,37 +112,64 @@ struct RpcHeader {
 /**
  * @brief RPC请求消息
  */
+/**
+ * @brief RPC请求消息
+ *
+ * @details 包含请求ID、调用模式、服务名、方法名和payload，
+ *          支持自有缓冲和零拷贝借用两种payload模式。
+ */
 class RpcRequest {
 public:
     RpcRequest() = default;
 
+    /**
+     * @brief 构造请求
+     * @param request_id 请求ID
+     * @param service 服务名
+     * @param method 方法名
+     */
     RpcRequest(uint32_t request_id, std::string_view service, std::string_view method)
         : m_request_id(request_id)
         , m_service_name(service)
         , m_method_name(method) {}
 
+    /// @brief 获取请求ID
     uint32_t requestId() const { return m_request_id; }
+    /// @brief 设置请求ID
     void requestId(uint32_t id) { m_request_id = id; }
+    /// @brief 获取调用模式
     RpcCallMode callMode() const { return m_call_mode; }
+    /// @brief 设置调用模式
     void callMode(RpcCallMode mode) { m_call_mode = mode; }
+    /// @brief 判断是否为流结束帧
     bool endOfStream() const { return m_end_of_stream; }
+    /// @brief 设置流结束标志
     void endOfStream(bool end) { m_end_of_stream = end; }
 
+    /// @brief 获取服务名
     const std::string& serviceName() const { return m_service_name; }
+    /// @brief 设置服务名
     void serviceName(std::string_view name) { m_service_name = name; }
+    /// @brief 设置服务名（移动语义）
     void serviceName(std::string&& name) { m_service_name = std::move(name); }
 
+    /// @brief 获取方法名
     const std::string& methodName() const { return m_method_name; }
+    /// @brief 设置方法名
     void methodName(std::string_view name) { m_method_name = name; }
+    /// @brief 设置方法名（移动语义）
     void methodName(std::string&& name) { m_method_name = std::move(name); }
 
+    /// @brief 获取payload数据（触发实体化拷贝）
     const std::vector<char>& payload() const {
         materializePayloadIfNeeded();
         return m_payload;
     }
+    /// @brief 获取payload大小
     size_t payloadSize() const {
         return m_payload_owned ? m_payload.size() : m_payload_view.size();
     }
+    /// @brief 获取payload视图（不触发拷贝）
     RpcPayloadView payloadView() const {
         if (m_payload_owned) {
             return RpcPayloadView{
@@ -152,6 +181,11 @@ public:
         }
         return m_payload_view;
     }
+    /**
+     * @brief 设置payload（拷贝模式）
+     * @param data 数据指针
+     * @param len 数据长度
+     */
     void payload(const char* data, size_t len) {
         m_payload.assign(data, data + len);
         m_payload_owned = true;
@@ -162,6 +196,10 @@ public:
             0
         };
     }
+    /**
+     * @brief 设置payload（移动模式）
+     * @param data 数据向量
+     */
     void payload(std::vector<char>&& data) {
         m_payload = std::move(data);
         m_payload_owned = true;
@@ -172,6 +210,11 @@ public:
             0
         };
     }
+    /**
+     * @brief 设置payload视图（零拷贝借用模式）
+     * @param view 外部payload视图
+     * @note 调用方必须保证视图指向的内存在消息被消费完成前保持有效
+     */
     void payloadView(const RpcPayloadView& view) {
         // 切换为借用模式：不拷贝数据，仅记录外部payload视图。
         m_payload.clear();
@@ -298,44 +341,63 @@ private:
     }
 
 private:
-    uint32_t m_request_id = 0;
-    RpcCallMode m_call_mode = RpcCallMode::UNARY;
-    bool m_end_of_stream = true;
-    std::string m_service_name;
-    std::string m_method_name;
-    mutable std::vector<char> m_payload;
-    mutable RpcPayloadView m_payload_view{};
-    mutable bool m_payload_owned = true;
+    uint32_t m_request_id = 0;              ///< 请求ID
+    RpcCallMode m_call_mode = RpcCallMode::UNARY;  ///< 调用模式
+    bool m_end_of_stream = true;             ///< 流结束标志
+    std::string m_service_name;              ///< 服务名
+    std::string m_method_name;               ///< 方法名
+    mutable std::vector<char> m_payload;     ///< payload缓冲区
+    mutable RpcPayloadView m_payload_view{}; ///< payload零拷贝视图
+    mutable bool m_payload_owned = true;     ///< 是否拥有payload数据
 };
 
 /**
  * @brief RPC响应消息
+ *
+ * @details 包含请求ID、调用模式、错误码和payload，
+ *          支持自有缓冲和零拷贝借用两种payload模式。
  */
 class RpcResponse {
 public:
     RpcResponse() = default;
 
+    /**
+     * @brief 构造响应
+     * @param request_id 对应的请求ID
+     * @param error_code 错误码，默认OK
+     */
     RpcResponse(uint32_t request_id, RpcErrorCode error_code = RpcErrorCode::OK)
         : m_request_id(request_id)
         , m_error_code(error_code) {}
 
+    /// @brief 获取请求ID
     uint32_t requestId() const { return m_request_id; }
+    /// @brief 设置请求ID
     void requestId(uint32_t id) { m_request_id = id; }
+    /// @brief 获取调用模式
     RpcCallMode callMode() const { return m_call_mode; }
+    /// @brief 设置调用模式
     void callMode(RpcCallMode mode) { m_call_mode = mode; }
+    /// @brief 判断是否为流结束帧
     bool endOfStream() const { return m_end_of_stream; }
+    /// @brief 设置流结束标志
     void endOfStream(bool end) { m_end_of_stream = end; }
 
+    /// @brief 获取错误码
     RpcErrorCode errorCode() const { return m_error_code; }
+    /// @brief 设置错误码
     void errorCode(RpcErrorCode code) { m_error_code = code; }
 
+    /// @brief 获取payload数据（触发实体化拷贝）
     const std::vector<char>& payload() const {
         materializePayloadIfNeeded();
         return m_payload;
     }
+    /// @brief 获取payload大小
     size_t payloadSize() const {
         return m_payload_owned ? m_payload.size() : m_payload_view.size();
     }
+    /// @brief 获取payload视图（不触发拷贝）
     RpcPayloadView payloadView() const {
         if (m_payload_owned) {
             return RpcPayloadView{
@@ -347,6 +409,11 @@ public:
         }
         return m_payload_view;
     }
+    /**
+     * @brief 设置payload（拷贝模式）
+     * @param data 数据指针
+     * @param len 数据长度
+     */
     void payload(const char* data, size_t len) {
         m_payload.assign(data, data + len);
         m_payload_owned = true;
@@ -357,6 +424,10 @@ public:
             0
         };
     }
+    /**
+     * @brief 设置payload（移动模式）
+     * @param data 数据向量
+     */
     void payload(std::vector<char>&& data) {
         m_payload = std::move(data);
         m_payload_owned = true;
@@ -367,6 +438,11 @@ public:
             0
         };
     }
+    /**
+     * @brief 设置payload视图（零拷贝借用模式）
+     * @param view 外部payload视图
+     * @note 调用方必须保证视图指向的内存在消息被消费完成前保持有效
+     */
     void payloadView(const RpcPayloadView& view) {
         // 切换为借用模式：不拷贝数据，仅记录外部payload视图。
         m_payload.clear();
@@ -374,6 +450,7 @@ public:
         m_payload_owned = false;
     }
 
+    /// @brief 判断响应是否为成功状态
     bool isOk() const { return m_error_code == RpcErrorCode::OK; }
 
     /**
@@ -465,13 +542,13 @@ private:
     }
 
 private:
-    uint32_t m_request_id = 0;
-    RpcCallMode m_call_mode = RpcCallMode::UNARY;
-    bool m_end_of_stream = true;
-    RpcErrorCode m_error_code = RpcErrorCode::OK;
-    mutable std::vector<char> m_payload;
-    mutable RpcPayloadView m_payload_view{};
-    mutable bool m_payload_owned = true;
+    uint32_t m_request_id = 0;              ///< 请求ID
+    RpcCallMode m_call_mode = RpcCallMode::UNARY;  ///< 调用模式
+    bool m_end_of_stream = true;             ///< 流结束标志
+    RpcErrorCode m_error_code = RpcErrorCode::OK;  ///< 错误码
+    mutable std::vector<char> m_payload;     ///< payload缓冲区
+    mutable RpcPayloadView m_payload_view{}; ///< payload零拷贝视图
+    mutable bool m_payload_owned = true;     ///< 是否拥有payload数据
 };
 
 } // namespace galay::rpc

@@ -39,30 +39,52 @@ using namespace galay::async;
  * @brief 流式 RPC 服务器配置
  */
 struct RpcStreamServerConfig {
-    std::string host = "0.0.0.0";
-    uint16_t port = 9100;
-    int backlog = 1024;
-    size_t io_scheduler_count = 0;
-    size_t compute_scheduler_count = 0;
-    RuntimeAffinityConfig affinity;
-    size_t ring_buffer_size = 128 * 1024;
+    std::string host = "0.0.0.0";              ///< 监听地址
+    uint16_t port = 9100;                      ///< 监听端口
+    int backlog = 1024;                        ///< 监听队列长度
+    size_t io_scheduler_count = 0;             ///< IO调度器数量，0表示自动
+    size_t compute_scheduler_count = 0;        ///< 计算调度器数量，0表示自动
+    RuntimeAffinityConfig affinity;            ///< 绑核配置
+    size_t ring_buffer_size = 128 * 1024;      ///< RingBuffer大小
 };
 
 class RpcStreamServer;
 
+/**
+ * @brief 流式RPC服务器构建器
+ *
+ * @details 使用Builder模式配置并创建RpcStreamServer实例。
+ */
 class RpcStreamServerBuilder {
 public:
+    /// @brief 设置监听地址
     RpcStreamServerBuilder& host(std::string value)                         { m_config.host = std::move(value); return *this; }
+    /// @brief 设置监听端口
     RpcStreamServerBuilder& port(uint16_t value)                            { m_config.port = value; return *this; }
+    /// @brief 设置监听队列长度
     RpcStreamServerBuilder& backlog(int value)                              { m_config.backlog = value; return *this; }
+    /// @brief 设置IO调度器数量
     RpcStreamServerBuilder& ioSchedulerCount(size_t value)                  { m_config.io_scheduler_count = value; return *this; }
+    /// @brief 设置计算调度器数量
     RpcStreamServerBuilder& computeSchedulerCount(size_t value)             { m_config.compute_scheduler_count = value; return *this; }
+    /**
+     * @brief 设置顺序绑核策略
+     * @param io_count IO调度器绑核数
+     * @param compute_count 计算调度器绑核数
+     * @return 构建器引用
+     */
     RpcStreamServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
         m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
         m_config.affinity.seq_io_count = io_count;
         m_config.affinity.seq_compute_count = compute_count;
         return *this;
     }
+    /**
+     * @brief 设置自定义绑核策略
+     * @param io_cpus IO调度器绑定的CPU列表
+     * @param compute_cpus 计算调度器绑定的CPU列表
+     * @return 是否设置成功（数量必须匹配调度器数量）
+     */
     bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
         if (io_cpus.size() != m_config.io_scheduler_count ||
             compute_cpus.size() != m_config.compute_scheduler_count) {
@@ -73,12 +95,15 @@ public:
         m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
         return true;
     }
+    /// @brief 设置环形缓冲区大小
     RpcStreamServerBuilder& ringBufferSize(size_t value)                    { m_config.ring_buffer_size = value; return *this; }
+    /// @brief 构建RpcStreamServer实例
     RpcStreamServer build() const;
+    /// @brief 仅导出配置
     RpcStreamServerConfig buildConfig() const                               { return m_config; }
 
 private:
-    RpcStreamServerConfig m_config;
+    RpcStreamServerConfig m_config;  ///< 服务器配置
 };
 
 /**
@@ -88,6 +113,10 @@ private:
  */
 class RpcStreamServer {
 public:
+    /**
+     * @brief 构造流式RPC服务器
+     * @param config 服务器配置
+     */
     explicit RpcStreamServer(const RpcStreamServerConfig& config)
         : m_config(config)
         , m_runtime(RuntimeBuilder()
@@ -100,10 +129,17 @@ public:
         stop();
     }
 
+    /**
+     * @brief 注册服务
+     * @param service 服务实例
+     */
     void registerService(std::shared_ptr<RpcService> service) {
         m_services[service->name()] = std::move(service);
     }
 
+    /**
+     * @brief 启动服务器
+     */
     void start() {
         RPC_LOG_INFO("[stream-server] [start]",
                      "host={} port={} backlog={}",
@@ -121,6 +157,9 @@ public:
         }
     }
 
+    /**
+     * @brief 停止服务器
+     */
     void stop() {
         if (m_running.exchange(false, std::memory_order_acq_rel)) {
             RPC_LOG_INFO("[stream-server] [stop]", "port={}", m_config.port);
@@ -128,12 +167,15 @@ public:
         }
     }
 
+    /// @brief 检查是否运行中
     bool isRunning() const {
         return m_running.load(std::memory_order_acquire);
     }
 
+    /// @brief 获取Runtime
     Runtime& runtime() { return m_runtime; }
 
+    /// @brief 获取最近一次服务器错误
     std::optional<RpcError> lastError() const {
         return m_last_error;
     }
@@ -392,11 +434,11 @@ private:
     }
 
 private:
-    RpcStreamServerConfig m_config;
-    Runtime m_runtime;
-    std::unordered_map<std::string, std::shared_ptr<RpcService>> m_services;
-    std::atomic<bool> m_running{false};
-    std::optional<RpcError> m_last_error;
+    RpcStreamServerConfig m_config;         ///< 服务器配置
+    Runtime m_runtime;                      ///< 运行时
+    std::unordered_map<std::string, std::shared_ptr<RpcService>> m_services;  ///< 服务注册表
+    std::atomic<bool> m_running{false};     ///< 运行标志
+    std::optional<RpcError> m_last_error;   ///< 最后一次错误
 };
 
 inline RpcStreamServer RpcStreamServerBuilder::build() const { return RpcStreamServer(m_config); }

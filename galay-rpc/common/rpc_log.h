@@ -1,6 +1,12 @@
 /**
  * @file rpc_log.h
  * @brief galay-rpc 独立日志入口与埋点宏
+ * @author galay-rpc
+ * @version 1.0.0
+ *
+ * @details 提供galay-rpc库专用的日志槽位和日志宏。
+ *          只影响 RPC_LOG_* 宏产生的日志，不会启用 kernel、ssl、http
+ *          或其他 galay 库的日志。
  */
 
 #ifndef GALAY_RPC_LOG_H
@@ -10,11 +16,13 @@
 
 namespace galay::rpc::detail
 {
+/// @brief RPC日志标签类型，用于区分RPC日志与其他库日志
 struct RpcLogTag;
 } // namespace galay::rpc::detail
 
 namespace galay::rpc::log
 {
+/// @brief RPC日志槽位类型，绑定到RpcLogTag的LoggerSlot实例
 using Slot = ::galay::kernel::LoggerSlot<::galay::rpc::detail::RpcLogTag>;
 
 /**

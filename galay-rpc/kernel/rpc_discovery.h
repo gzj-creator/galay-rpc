@@ -35,6 +35,7 @@ struct ServiceEndpoint {
     std::string instance_id;    ///< 实例ID
     uint32_t weight = 100;      ///< 权重（用于负载均衡）
 
+    /// @brief 获取地址字符串（host:port）
     std::string address() const {
         return host + ":" + std::to_string(port);
     }
@@ -45,20 +46,27 @@ struct ServiceEndpoint {
  */
 struct DiscoveryError {
     enum Code {
-        OK = 0,
-        NOT_FOUND,
-        CONNECTION_ERROR,
-        LOCK_TIMEOUT,
-        INTERNAL_ERROR
+        OK = 0,             ///< 成功
+        NOT_FOUND,          ///< 未找到
+        CONNECTION_ERROR,   ///< 连接错误
+        LOCK_TIMEOUT,       ///< 锁超时
+        INTERNAL_ERROR      ///< 内部错误
     };
 
-    Code code = OK;
-    std::string message;
+    Code code = OK;         ///< 错误码
+    std::string message;    ///< 错误消息
 
     DiscoveryError() = default;
+    /**
+     * @brief 构造错误
+     * @param c 错误码
+     * @param msg 错误消息
+     */
     DiscoveryError(Code c, std::string msg = "") : code(c), message(std::move(msg)) {}
 
+    /// @brief 判断是否成功
     bool isOk() const { return code == OK; }
+    /// @brief 判断是否存在错误
     explicit operator bool() const { return !isOk(); }
 };
 
@@ -75,8 +83,8 @@ enum class ServiceEventType {
  * @brief 服务变更事件
  */
 struct ServiceEvent {
-    ServiceEventType type;
-    ServiceEndpoint endpoint;
+    ServiceEventType type;    ///< 事件类型
+    ServiceEndpoint endpoint; ///< 服务端点
 };
 
 /**
@@ -202,8 +210,8 @@ public:
     }
 
 private:
-    std::unordered_map<std::string, std::vector<ServiceEndpoint>> m_services;
-    std::unordered_map<std::string, std::vector<ServiceWatchCallback>> m_watchers;
+    std::unordered_map<std::string, std::vector<ServiceEndpoint>> m_services;    ///< 服务名到端点列表的映射
+    std::unordered_map<std::string, std::vector<ServiceWatchCallback>> m_watchers;  ///< 服务名到监听回调的映射
 };
 
 // 验证LocalServiceRegistry满足ServiceRegistry concept
@@ -387,21 +395,21 @@ public:
     std::vector<ServiceEndpoint> lastEndpoints() const { return m_last_endpoints; }
 
 private:
-    kernel::AsyncMutex m_mutex;
-    std::unordered_map<std::string, std::vector<ServiceEndpoint>> m_services;
-    std::unordered_map<std::string, std::vector<ServiceWatchCallback>> m_watchers;
-    DiscoveryError m_last_error;
-    std::vector<ServiceEndpoint> m_last_endpoints;
+    kernel::AsyncMutex m_mutex;       ///< 异步互斥锁
+    std::unordered_map<std::string, std::vector<ServiceEndpoint>> m_services;    ///< 服务名到端点列表的映射
+    std::unordered_map<std::string, std::vector<ServiceWatchCallback>> m_watchers;  ///< 服务名到监听回调的映射
+    DiscoveryError m_last_error;      ///< 最后一次操作错误
+    std::vector<ServiceEndpoint> m_last_endpoints;  ///< 最后一次发现的端点列表
 };
 
 // 验证AsyncLocalServiceRegistry满足AsyncServiceRegistry concept
 static_assert(AsyncServiceRegistry<AsyncLocalServiceRegistry>, "AsyncLocalServiceRegistry must satisfy AsyncServiceRegistry concept");
 
 // 使用 galay-kernel 的负载均衡策略
-using RoundRobinSelector = details::RoundRobinLoadBalancer<ServiceEndpoint>;
-using RandomSelector = details::RandomLoadBalancer<ServiceEndpoint>;
-using WeightedRoundRobinSelector = details::WeightRoundRobinLoadBalancer<ServiceEndpoint>;
-using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoint>;
+using RoundRobinSelector = details::RoundRobinLoadBalancer<ServiceEndpoint>;           ///< 轮询选择器
+using RandomSelector = details::RandomLoadBalancer<ServiceEndpoint>;                   ///< 随机选择器
+using WeightedRoundRobinSelector = details::WeightRoundRobinLoadBalancer<ServiceEndpoint>;  ///< 加权轮询选择器
+using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoint>;   ///< 加权随机选择器
 
 /**
  * @brief 服务发现客户端
@@ -412,6 +420,10 @@ using WeightedRandomSelector = details::WeightedRandomLoadBalancer<ServiceEndpoi
 template<ServiceRegistry Registry, typename Selector = RoundRobinSelector>
 class ServiceDiscoveryClient {
 public:
+    /**
+     * @brief 构造服务发现客户端
+     * @param registry 注册中心引用
+     */
     explicit ServiceDiscoveryClient(Registry& registry)
         : m_registry(registry), m_selector() {}
 
@@ -455,8 +467,8 @@ public:
     }
 
 private:
-    Registry& m_registry;
-    Selector m_selector;
+    Registry& m_registry;   ///< 注册中心引用
+    Selector m_selector;     ///< 负载均衡选择器
 };
 
 } // namespace galay::rpc

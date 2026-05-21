@@ -1,6 +1,15 @@
+/**
+ * @file module_prelude.hpp
+ * @brief C++23模块构建的自动预编译头
+ * @author galay-rpc
+ * @version 1.0.0
+ *
+ * @details 用于在Clang/GCC/MSVC上进行过渡性C++23模块构建。
+ *          将第三方/系统/依赖头文件放在全局模块片段中，
+ *          避免模块编译时出现重复声明问题。
+ */
+
 #pragma once
-// Auto prelude for transitional C++23 module builds on Clang/GCC/MSVC.
-// Keep third-party/system/dependency headers in global module fragment.
 
 #if __has_include(<algorithm>)
 #include <algorithm>

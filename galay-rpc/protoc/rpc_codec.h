@@ -3,6 +3,9 @@
  * @brief RPC消息编解码器
  * @author galay-rpc
  * @version 1.0.0
+ *
+ * @details 提供RPC消息头部、请求和响应的静态编解码方法，
+ *          支持渐进式解码（先解码头部判断完整性，再解码完整消息）。
  */
 
 #ifndef GALAY_RPC_CODEC_H

@@ -53,6 +53,11 @@ class RpcClientImpl;
 
 namespace detail {
 
+/**
+ * @brief 期望特定request_id的RPC响应读取状态
+ *
+ * @details 从RingBuffer中解析响应消息，并验证request_id与期望值匹配。
+ */
 class ExpectedRpcResponseReadState : public RpcRingBufferReadStateBase<RpcAwaitableResult>
 {
 public:
@@ -67,6 +72,7 @@ public:
     {
     }
 
+    /// @brief 从RingBuffer中尝试解析期望的响应消息
     bool parseFromRingBuffer()
     {
         if (ringBuffer().readable() == 0) {
@@ -104,19 +110,33 @@ public:
     }
 
 private:
-    const RpcReaderSetting* m_setting = nullptr;
-    uint32_t m_expected_request_id = 0;
-    RpcResponse* m_response = nullptr;
+    const RpcReaderSetting* m_setting = nullptr;  ///< 读取配置
+    uint32_t m_expected_request_id = 0;           ///< 期望的请求ID
+    RpcResponse* m_response = nullptr;            ///< 输出响应对象
 };
 
 }  // namespace detail
 
+/**
+ * @brief 接收RPC响应的链式等待体
+ *
+ * @details 支持超时控制的RPC响应接收协程等待体，
+ *          内部使用状态机驱动readv直到收到完整响应。
+ * @tparam SocketType Socket类型
+ */
 template<typename SocketType>
 class RecvRpcResponseChainAwaitable
     : public TimeoutSupport<RecvRpcResponseChainAwaitable<SocketType>> {
 public:
     using Result = detail::RpcAwaitableResult;
 
+    /**
+     * @brief 构造响应接收等待体
+     * @param ring_buffer 环形缓冲区
+     * @param setting 读取配置
+     * @param expected_request_id 期望匹配的请求ID
+     * @param response 输出响应对象
+     */
     RecvRpcResponseChainAwaitable(RingBuffer& ring_buffer,
                                   const RpcReaderSetting& setting,
                                   uint32_t expected_request_id,
@@ -138,25 +158,27 @@ public:
     RecvRpcResponseChainAwaitable(const RecvRpcResponseChainAwaitable&) = delete;
     RecvRpcResponseChainAwaitable& operator=(const RecvRpcResponseChainAwaitable&) = delete;
 
-    bool await_ready() { return m_inner.await_ready(); }
+    bool await_ready() { return m_inner.await_ready(); }  ///< 检查是否已就绪
     template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle)
+    bool await_suspend(std::coroutine_handle<Promise> handle)  ///< 挂起协程
     {
         return m_inner.await_suspend(handle);
     }
-    Result await_resume() { return m_inner.await_resume(); }
-    void markTimeout() { m_inner.markTimeout(); }
+    Result await_resume() { return m_inner.await_resume(); }  ///< 恢复协程并返回结果
+    void markTimeout() { m_inner.markTimeout(); }  ///< 标记超时
 
 private:
     using InnerAwaitable =
         StateMachineAwaitable<detail::RpcRingBufferReadMachine<detail::ExpectedRpcResponseReadState>>;
 
-    std::shared_ptr<detail::ExpectedRpcResponseReadState> m_state;
-    InnerAwaitable m_inner;
+    std::shared_ptr<detail::ExpectedRpcResponseReadState> m_state;  ///< 读取状态
+    InnerAwaitable m_inner;  ///< 内部状态机等待体
 };
 
+/// @brief RPC调用结果类型
 using RpcCallResult = std::expected<std::optional<RpcResponse>, RpcError>;
 
+/// @brief RPC调用等待体实现类型
 template<typename SocketType>
 using RpcCallAwaitableImpl = Task<RpcCallResult>;
 
@@ -164,31 +186,46 @@ using RpcCallAwaitableImpl = Task<RpcCallResult>;
  * @brief RPC客户端配置
  */
 struct RpcClientConfig {
-    RpcReaderSetting reader_setting;
-    RpcWriterSetting writer_setting;
-    size_t ring_buffer_size = kDefaultRpcRingBufferSize;
+    RpcReaderSetting reader_setting;            ///< 读取器配置
+    RpcWriterSetting writer_setting;            ///< 写入器配置
+    size_t ring_buffer_size = kDefaultRpcRingBufferSize;  ///< 环形缓冲区大小
 };
 
+/**
+ * @brief RPC客户端构建器
+ *
+ * @details 使用Builder模式配置并创建RpcClient实例。
+ */
 class RpcClientBuilder {
 public:
+    /// @brief 设置读取器配置
     RpcClientBuilder& readerSetting(RpcReaderSetting setting) { m_config.reader_setting = std::move(setting); return *this; }
+    /// @brief 设置写入器配置
     RpcClientBuilder& writerSetting(RpcWriterSetting setting) { m_config.writer_setting = std::move(setting); return *this; }
+    /// @brief 设置环形缓冲区大小
     RpcClientBuilder& ringBufferSize(size_t size)             { m_config.ring_buffer_size = size; return *this; }
+    /// @brief 构建RpcClient实例
     RpcClientImpl<TcpSocket> build() const;
+    /// @brief 仅导出配置
     RpcClientConfig buildConfig() const                       { return m_config; }
 
 private:
-    RpcClientConfig m_config;
+    RpcClientConfig m_config;  ///< 客户端配置
 };
 
 /**
  * @brief RPC客户端模板类
+ *
+ * @details 提供RPC客户端的完整功能，包括连接、一元调用、流式调用和流会话管理。
+ *          支持超时控制，使用协程进行异步IO操作。
+ * @tparam SocketType 底层Socket类型，默认为TcpSocket
  */
 template<typename SocketType>
 class RpcClientImpl {
 public:
     /**
      * @brief 构造函数
+     * @param config 客户端配置
      */
     explicit RpcClientImpl(const RpcClientConfig& config = RpcClientConfig())
         : m_socket(nullptr)
@@ -436,15 +473,16 @@ public:
     const RpcReaderSetting& readerSetting() const { return m_config.reader_setting; }
 
 private:
-    std::unique_ptr<SocketType> m_socket;
-    std::unique_ptr<RingBuffer> m_ring_buffer;
-    RpcClientConfig m_config;
-    std::atomic<uint32_t> m_request_id;
-    std::atomic<uint32_t> m_stream_id;
+    std::unique_ptr<SocketType> m_socket;         ///< 底层Socket
+    std::unique_ptr<RingBuffer> m_ring_buffer;    ///< 环形缓冲区
+    RpcClientConfig m_config;                     ///< 客户端配置
+    std::atomic<uint32_t> m_request_id;           ///< 自增请求ID
+    std::atomic<uint32_t> m_stream_id;            ///< 自增流ID
 };
 
-// 类型别名
+/// @brief RPC调用等待体类型别名（TcpSocket）
 using RpcCallAwaitable = RpcCallAwaitableImpl<TcpSocket>;
+/// @brief RPC客户端类型别名（TcpSocket）
 using RpcClient = RpcClientImpl<TcpSocket>;
 inline RpcClient RpcClientBuilder::build() const { return RpcClient(m_config); }
 
